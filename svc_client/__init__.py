@@ -3,8 +3,10 @@ import re
 import requests
 import sys
 import time
+import pickle
 
-from json import dumps
+from json import dumps, loads
+from base64 import b64decode
 
 __all__ = ['Client', 'ClientError']
 
@@ -25,6 +27,11 @@ INVALID_STREAM_SEARCH_PARAMS = ('cursorMark', 'rows', 'sort')
 RETRY_FOREVER = 0
 SEARCHABLE = ('alert', 'file', 'result', 'signature', 'submission')
 SUPPORTED_API = 'v1'
+
+def as_python_object(dct):
+    if '_python_object' in dct:
+        return pickle.loads(b64decode(dct['_python_object'].encode('utf-8')))
+    return dct
 
 
 def _bool_to_param_string(b):
@@ -213,7 +220,8 @@ class Help(object):
         self._connection = connection
 
     def get_classification_definition(self):
-        return self._connection.post(_path('help/classification_definition'))
+        ret = self._connection.post(_path('help/classification_definition'))
+        return loads(ret, object_hook=as_python_object)
 
     def get_systems_constants(self):
         return self._connection.post(_path('help/constants'))
