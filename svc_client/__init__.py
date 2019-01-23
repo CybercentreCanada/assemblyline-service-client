@@ -1,14 +1,9 @@
-import json
-import logging
-import os
+
 import re
 import requests
-import socketIO_client
 import sys
 import time
-import threading
 
-from base64 import b64encode
 from json import dumps
 
 __all__ = ['Client', 'ClientError']
@@ -29,7 +24,7 @@ except ImportError:
 INVALID_STREAM_SEARCH_PARAMS = ('cursorMark', 'rows', 'sort')
 RETRY_FOREVER = 0
 SEARCHABLE = ('alert', 'file', 'result', 'signature', 'submission')
-SUPPORTED_API = 'v3'
+SUPPORTED_API = 'v1'
 
 
 def _bool_to_param_string(b):
@@ -66,7 +61,7 @@ def _kw(*ex):
 
 # Calculate the API path using the class and method names as shown below:
 #
-#     /api/v3/<class_name>/<method_name>/[arg1/[arg2/[...]]][?k1=v1[...]]
+#     /api/v1/<class_name>/<method_name>/[arg1/[arg2/[...]]][?k1=v1[...]]
 #
 # noinspection PyProtectedMember
 def _magic_path(obj, *args, **kw):
@@ -82,7 +77,7 @@ def _param_ok(k):
 
 # Calculate the API path using the prefix as shown:
 #
-#     /api/v3/<prefix>/[arg1/[arg2/[...]]][?k1=v1[...]]
+#     /api/v1/<prefix>/[arg1/[arg2/[...]]][?k1=v1[...]]
 #
 def _path(prefix, *args, **kw):
     path = '/'.join(['api', SUPPORTED_API, prefix] + list(args) + [''])
@@ -136,15 +131,13 @@ def _walk(obj, path, paths):
 
 class Client(object):
     def __init__(  # pylint: disable=R0913
-        self, server, auth=None, debug=lambda x: None,
-        headers=None, retries=RETRY_FOREVER, silence_requests_warnings=True, verify=True
+        self, server, debug=lambda x: None,
+        headers=None, retries=RETRY_FOREVER
     ):
         self._connection = Connection(
-            server, auth, debug, headers, retries,
-            silence_requests_warnings, apikey, verify
+            server, debug, headers, retries
         )
 
-        self.classification = Classification(self._connection)
         self.help = Help(self._connection)
         self.job = Job(self._connection)
         self.log = Log(self._connection)
@@ -167,71 +160,26 @@ class ClientError(Exception):
 class Connection(object):
     # noinspection PyUnresolvedReferences
     def __init__(  # pylint: disable=R0913
-        self, server, debug, headers, retries,
-        silence_requests_warnings, apikey, verify
+        self, server, debug, headers, retries
     ):
-        self.apikey = apikey
-
-        if silence_requests_warnings:
-            import warnings
-            warnings.simplefilter('ignore')
 
         self.debug = debug
         self.max_retries = retries
         self.server = server
-        self.verify = verify
 
         session = requests.Session()
 
         session.headers.update({'content-type': 'application/json'})
-        session.verify = verify
 
         if headers:
             session.headers.update(headers)
 
         self.session = session
 
-        try:
-            auth_session_detail = self._authenticate()
-        except requests.exceptions.SSLError as ssle:
-            raise ClientError("Client could not connect to the server "
-                              "due to the following SSLError: %s" % ssle, 495)
-
-        session.timeout = auth_session_detail['session_duration']
-
         r = self.request(self.session.get, 'api/', _convert)
         s = {SUPPORTED_API}
         if not isinstance(r, list) or not set(r).intersection(s):
             raise ClientError("Supported API (%s) not available" % s, 0)
-
-    def _load_public_encryption_key(self):
-        public_key = self.request(self.session.get, "api/v3/auth/init/", _convert)
-
-        if not public_key:
-            return None
-
-        from Crypto.PublicKey import RSA
-        from Crypto.Cipher import PKCS1_v1_5
-
-        key = RSA.importKey(public_key)
-        return PKCS1_v1_5.new(key)
-
-    def _authenticate(self):
-        if self.apikey and len(self.apikey) == 2:
-            public_key = self._load_public_encryption_key()
-            if public_key:
-                key = b64encode(public_key.encrypt(self.apikey[1].encode("UTF-8")))
-                if isinstance(key, bytes) and not isinstance(key, str):
-                    key = key.decode("UTF-8")
-            else:
-                key = self.apikey[1]
-            auth = {
-                'user': self.apikey[0],
-                'apikey': key
-            }
-        else:
-            auth = {}
-        return self.request(self.session.get, "api/v3/auth/login/", _convert, data=json.dumps(auth))
 
     def delete(self, path, **kw):
         return self.request(self.session.delete, path, _convert, **kw)
@@ -253,21 +201,9 @@ class Connection(object):
             if retries:
                 time.sleep(min(2, 2 ** (retries - 7)))
             response = func('/'.join((self.server, path)), **kw)
-            if 'XSRF-TOKEN' in response.cookies:
-                self.session.headers.update({'X-XSRF-TOKEN': response.cookies['XSRF-TOKEN']})
+
             if response.ok:
                 return process(response)
-            elif response.status_code == 401:
-                try:
-                    resp_data = response.json()
-                    if resp_data["api_error_message"] == "Authentication required":
-                        self._authenticate()
-                    else:
-                        raise ClientError(response.content, response.status_code)
-                except Exception:
-                    raise ClientError(response.content, response.status_code)
-            elif response.status_code not in (502, 503, 504):
-                raise ClientError(response.content, response.status_code)
 
             retries += 1
 
@@ -299,8 +235,13 @@ class Job(object):
 
 
 class Log(object):
-    def __init__(self, connection, log):
+    def __init__(self, connection):
         self._connection = connection
+
+    def __call__(self, log=None):
+        if log is None:
+            raise ClientError('You need to provide the name of the logger.', 400)
+
         self.log = log
 
     def info(self, msg):
