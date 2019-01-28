@@ -220,17 +220,25 @@ class Help(object):
         self._connection = connection
 
     def get_classification_definition(self):
-        ret = self._connection.post(_path('help/classification_definition'))
-        return loads(ret, object_hook=as_python_object)
+        return self._connection.get(_path('help/classification_definition'))
 
     def get_systems_constants(self):
-        return self._connection.post(_path('help/constants'))
+        ret = self._connection.get(_path('help/constants'))
+
+        # Decode nested list into list of tuples for StringTable
+        new_dict = {}
+        for x in ret:
+            temp_list = []
+            for y in ret[x]:
+                temp_list.append((str(y[0]), int(y[1])))
+            new_dict[x] = temp_list
+        return new_dict
 
     def get_system_configuration(self, static=False):
         request = {
             'static': static
         }
-        return self._connection.post(_path('help/configuration'), data=dumps(request))
+        return self._connection.get(_path('help/configuration'), data=dumps(request))
 
 
 class Job(object):
@@ -266,7 +274,7 @@ class Log(object):
         }
         return self._connection.post(_path('log/warning'), data=dumps(request))
 
-    def error(self, msg):
+    def error(self, msg):  # TODO: log with stacktrace and also do another api for terminal error
         request = {
             'log': self.log,
             'msg': msg
