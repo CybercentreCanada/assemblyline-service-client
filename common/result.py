@@ -1,10 +1,9 @@
 import logging
 
-from assemblyline.common.classification import InvalidClassification
+from assemblyline.common.classification import Classification, InvalidClassification
 from assemblyline.common.context import Context
 from assemblyline.common.net import is_valid_ip, is_valid_domain, is_valid_email, is_valid_port
-from common.str_utils import StringTable, NamedConstants, safe_str
-# from assemblyline.common import forge
+from assemblyline.common.str_utils import StringTable, NamedConstants, safe_str
 # from assemblyline.al.common.heuristics import Heuristic
 from svc_client import Client
 
@@ -15,8 +14,7 @@ svc_client = Client("http://assemblyline-internal")
 
 constants = svc_client.help.get_systems_constants()
 
-# Classification = forge.get_classification()
-Classification = svc_client.help.get_classification_definition()
+Classification = Classification(svc_client.help.get_classification_definition())
 
 TEXT_FORMAT = StringTable('TEXT_FORMAT', [
     ('MEMORY_DUMP', 3),
