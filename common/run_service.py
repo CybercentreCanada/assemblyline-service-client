@@ -13,6 +13,7 @@ import sys
 import time
 
 from itertools import chain
+from types import ModuleType
 
 # from assemblyline.common.identify import fileinfo
 from assemblyline.common.importing import load_module_by_path
@@ -24,24 +25,12 @@ from common import result
 # from assemblyline.al.testing import mocks
 
 
-from types import ModuleType
-class sub_mod(ModuleType):
-    def __init__(self, service_client):
-        super().__init__('forge')
-        self.__client = service_client
-    @staticmethod
-    def get_classification(self):
-        return self.__client.get_classification()
-
-
-class MockResultPackage(ModuleType):
+class MockAssemblylineAlService(ModuleType):
     def __init__(self):
-        super(module, self).__init__('assemblyline.al.common.result')
-        # self.__client = service_client
-        # self.forge = sub_module(service_client)
-
-        from common.result import Result
-        self.Result = Result
+        super(MockAssemblylineAlService, self).__init__('assemblyline.al.service')
+        import common.base
+        self.base = common.base
+        self.base.__name__ = 'assemblyline.al.service.base'
 
 
 class MockAssemblylineAlCommon(ModuleType):
@@ -56,23 +45,26 @@ class MockAssemblylineAl(ModuleType):
     def __init__(self):
         super(MockAssemblylineAl, self).__init__('assemblyline.al')
         self.common = MockAssemblylineAlCommon()
+        self.common.__name__ = 'assemblyline.al.common'
+        self.service = MockAssemblylineAlService()
+        self.service.__name__ = 'assemblyline.al.service'
+
 
 class MockAssemblyline(ModuleType):
     def __init__(self):
         super(MockAssemblyline, self).__init__('assemblyline')
         self.al = MockAssemblylineAl()
+        self.al.__name__ = 'assemblyline.al'
+
 
 mock_al = MockAssemblyline()
-
 
 sys.modules['assemblyline'] = mock_al
 sys.modules['assemblyline.al'] = mock_al.al
 sys.modules['assemblyline.al.common'] = mock_al.al.common
 sys.modules['assemblyline.al.common.result'] = mock_al.al.common.result
-#sys.modules[totally_random.__name__] = totally_random
-# sys.modules[totally_random.forge.__name__] = totally_random.forge
+sys.modules['assemblyline.al.service.base'] = mock_al.al.service.base
 
-print([key for key in sys.modules.keys() if key.startswith('as')])
 
 def scan_file(svc_class, sha256, **kwargs):
     logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
