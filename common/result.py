@@ -4,7 +4,6 @@ from assemblyline.common.classification import InvalidClassification
 from assemblyline.common.context import Context
 from common.net import is_valid_ip, is_valid_domain, is_valid_email, is_valid_port
 from common.str_utils import StringTable, NamedConstants, safe_str
-# from assemblyline.common.forge import get_constants
 # from assemblyline.common import forge
 # from assemblyline.al.common.heuristics import Heuristic
 from svc_client import Client
@@ -14,7 +13,6 @@ import traceback
 # TODO: auth
 svc_client = Client("http://assemblyline-internal")
 
-# constants = get_constants()
 constants = svc_client.help.get_systems_constants()
 
 # Classification = forge.get_classification()
@@ -56,7 +54,7 @@ TAG_WEIGHT = NamedConstants('TAG_WEIGHT', [
 
 TAG_SCORE = TAG_WEIGHT
 
-TAG_TYPE = StringTable('TAG_TYPE', constants.STANDARD_TAG_TYPES)
+TAG_TYPE = StringTable('TAG_TYPE', constants['STANDARD_TAG_TYPES'])
 
 TAG_VALIDATORS = {
     "NET_IP": is_valid_ip,
@@ -92,7 +90,7 @@ DBT = StringTable('DBT', [
 
 # please reuse those.  This is meant to be a summary so, if we have different tags for the same thing,
 # it won't be a summary anymore.
-FILE_SUMMARY = StringTable('FILE_SUMMARY', constants.FILE_SUMMARY)
+FILE_SUMMARY = StringTable('FILE_SUMMARY', constants['FILE_SUMMARY'])
 
 log = logging.getLogger('assemblyline.svc.common.result')
 
