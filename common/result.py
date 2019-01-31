@@ -2,7 +2,7 @@ import logging
 
 from assemblyline.common.classification import InvalidClassification
 from assemblyline.common.context import Context
-from common.net import is_valid_ip, is_valid_domain, is_valid_email, is_valid_port
+from assemblyline.common.net import is_valid_ip, is_valid_domain, is_valid_email, is_valid_port
 from common.str_utils import StringTable, NamedConstants, safe_str
 # from assemblyline.common import forge
 # from assemblyline.al.common.heuristics import Heuristic

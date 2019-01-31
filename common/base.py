@@ -1,6 +1,6 @@
 
 from common.properties import classproperty
-from common import net
+from assemblyline.common import net
 from svc_client import Client
 
 # TODO: Client server & login details
