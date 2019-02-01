@@ -19,7 +19,6 @@ from types import ModuleType
 from assemblyline.common.importing import load_module_by_path
 from common import result
 
-# from assemblyline.al.common import forge
 # from assemblyline.al.common.importing import service_by_name
 # from assemblyline.al.common.task import Task
 # from assemblyline.al.testing import mocks
@@ -58,7 +57,6 @@ class MockAssemblyline(ModuleType):
 
 
 mock_al = MockAssemblyline()
-
 sys.modules['assemblyline'] = mock_al
 sys.modules['assemblyline.al'] = mock_al.al
 sys.modules['assemblyline.al.common'] = mock_al.al.common
@@ -66,7 +64,7 @@ sys.modules['assemblyline.al.common.result'] = mock_al.al.common.result
 sys.modules['assemblyline.al.service.base'] = mock_al.al.service.base
 
 
-def scan_file(svc_class, sha256, **kwargs):
+def scan_file(svc_class, task, **kwargs):
     logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
     # Don't use srl normalization for filenames (i.e. 1/2/3/4/1234mysha256)
@@ -97,8 +95,7 @@ def scan_file(svc_class, sha256, **kwargs):
     # Run all inputs through the service. Children will end up in the children list,
     # results will end up in the results list. Actual fleshed out service results
     # will be in riak.
-    task = Task.create(srl=sha256, ignore_cache=True,
-                       submitter='local_soak_test', **kwargs)
+    
     start = time.time()
     if service.BATCH_SERVICE:
         service._handle_task_batch([task, ])
@@ -134,20 +131,18 @@ def main():
     parser.add_argument('sample')
     args = parser.parse_args()
 
-
-
-
     name = args.service_name
-    # svc_class = class_by_name(name) if '.' in name else service_by_name(name)
-
     svc_class = load_module_by_path(name)
-
+    
     filename = args.sample
     if not os.path.isfile(filename):
         print('Invalid input file: %s' % filename)
         exit(3)
-
-    fi = fileinfo(filename)
+    
+    # TODO: get fileinfo: fi = fileinfo(filename)
+    # TODO: Create task object using api
+    # task = Task.create(srl=sha256, ignore_cache=True, submitter='local_soak_test', **kwargs)
+    
 
     sha256 = fi['sha256']
     # The transport expects the filename to be the sha256.
@@ -164,7 +159,7 @@ def main():
             print('exception trying to link file: %s' % str(ex))
         created_link = True
 
-    scan_file(svc_class, **fi)
+    scan_file(svc_class, task, **fi)
 
     if created_link:
         os.unlink(sha256)
