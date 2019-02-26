@@ -10,7 +10,7 @@ from svc_client import Client
 import traceback
 
 # TODO: auth
-svc_client = Client("http://assemblyline-internal")
+svc_client = Client("http://0.0.0.0:5000")
 
 constants = svc_client.help.get_systems_constants()
 
@@ -181,6 +181,8 @@ class ResultSection(dict):
                'links',
                'file_id',
                'subsections',
+               'section_id',
+               'parent_section_id',
                'depth',
                'parent',
                'finalized',
@@ -298,8 +300,8 @@ class ResultSection(dict):
         # At this point, all subsections are finalized and we're not deleting ourself
         if self.parent is not None:
             try:
-                self.parent.classification = \
-                    Classification.max_classification(self.classification, self.parent.classification)
+                # self.parent.classification = \
+                #     Classification.max_classification(self.classification, self.parent.classification)
                 self.parent.score += self.score
                 for tag in self.tags:
                     self.parent.add_tag(tag['type'], tag['value'], tag['weight'], usage=tag['usage'],
@@ -310,6 +312,7 @@ class ResultSection(dict):
 
         self.pop('tags')
         self.pop('parent')
+        self.pop('subsections')
         return keep_me
 
     def __getattribute__(self, attr):
@@ -340,10 +343,10 @@ class Result(dict):
 
     allowed = ('tags',
                'tags_score',
-               'classification',
                'score',
                'file_id',
                'sections',
+               'section_id',
                'filename',
                'status',
                'order_by_score',
@@ -475,10 +478,12 @@ class Result(dict):
     def flatten_list(self, lis):
         new_lis = []
         for item in lis:
+            parent_section_id = item.section_id
             if isinstance(item, list):
-                new_lis.extend(self.flatten(item))
+                new_lis.extend(self.flatten_list(item))
             else:
                 new_lis.append(item)
+                item.parent_section_id = parent_section_id
         return new_lis
 
     def order_results_by_score(self):
