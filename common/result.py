@@ -4,7 +4,7 @@ from assemblyline.common.classification import Classification, InvalidClassifica
 from assemblyline.common.context import Context
 from assemblyline.common.net import is_valid_ip, is_valid_domain, is_valid_email, is_valid_port
 from assemblyline.common.str_utils import StringTable, NamedConstants, safe_str
-# from assemblyline.al.common.heuristics import Heuristic
+
 from svc_client import Client
 
 import traceback
@@ -21,6 +21,7 @@ TEXT_FORMAT = StringTable('TEXT_FORMAT', [
     ('GRAPH_DATA', 4),
     ('URL', 5),
     ('JSON', 6),
+    ('TEXT', 7),
 ])
 
 TAG_USAGE = StringTable('TAG_USAGE', [
@@ -52,7 +53,7 @@ TAG_WEIGHT = NamedConstants('TAG_WEIGHT', [
 
 TAG_SCORE = TAG_WEIGHT
 
-TAG_TYPE = StringTable('TAG_TYPE', constants['STANDARD_TAG_TYPES'])
+TAG_TYPE = StringTable('TAG_TYPE', constants.STANDARD_TAG_TYPES)
 
 TAG_VALIDATORS = {
     "NET_IP": is_valid_ip,
@@ -88,7 +89,7 @@ DBT = StringTable('DBT', [
 
 # please reuse those.  This is meant to be a summary so, if we have different tags for the same thing,
 # it won't be a summary anymore.
-FILE_SUMMARY = StringTable('FILE_SUMMARY', constants['FILE_SUMMARY'])
+FILE_SUMMARY = StringTable('FILE_SUMMARY', constants.FILE_SUMMARY)
 
 log = logging.getLogger('assemblyline.svc.common.result')
 
@@ -96,8 +97,6 @@ log = logging.getLogger('assemblyline.svc.common.result')
 def is_tag_valid(tag):
     tag_type = tag.get('type', None)
     value = tag.get('value', '')
-    weight = tag.get('weight', 0)
-    usage = tag.get('usage', None)
     classification = tag.get('classification', None)
     context = tag.get('context', None)
 
@@ -111,14 +110,6 @@ def is_tag_valid(tag):
 
     if len(value) <= 0 or len(value) >= 2048:
         log.warning("Invalid tag value (Incorrect size): %s:'%s'", tag_type, safe_str(value))
-        return False
-
-    if not (isinstance(weight, int) and -1000 < weight < 1000):
-        log.warning("Invalid tag weight: %s", weight)
-        return False
-
-    if usage and not TAG_USAGE.contains_value(usage):
-        log.warning("Invalid tag usage: %s", usage)
         return False
 
     if not Classification.is_valid(classification):
@@ -145,17 +136,15 @@ class Tag(object):
                  usage=TAG_USAGE.IDENTIFICATION,
                  classification=Classification.UNRESTRICTED,
                  context=None):
-
         self.tag_type = tag_type
         self.value = value
-        self.weight = weight
-        self.usage = usage
+        # self.weight = weight
+        # self.usage = usage
         self.classification = classification
         self.context = context
 
 
 class ResultSection(dict):
-
     """
     ResultSections behave like a dict with convenience methods for creating
     UI-friendly section structures:
@@ -181,8 +170,8 @@ class ResultSection(dict):
                'links',
                'file_id',
                'subsections',
-               'section_id',
                'parent_section_id',
+               'section_id',
                'depth',
                'parent',
                'finalized',
@@ -195,7 +184,7 @@ class ResultSection(dict):
                  classification=Classification.UNRESTRICTED,
                  parent=None,
                  body='',
-                 body_format=None,
+                 body_format=TEXT_FORMAT.TEXT,
                  tags=None,
                  ):
         super(ResultSection, self).__init__()
@@ -213,7 +202,7 @@ class ResultSection(dict):
         if isinstance(title_text, list):
             title_text = ''.join(title_text)
         self.title_text = safe_str(title_text)
- 
+
         if parent is not None:
             parent.add_section(self)
 
@@ -227,13 +216,13 @@ class ResultSection(dict):
             log.warning("invalid classification:%s.\n%s", str(self.classification), str(tb))
         if not isinstance(self.title_text, basestring):
             log.warning("invalid type for titletext: %s", type(self.title_text))
-        if not isinstance(self.body, basestring) and not (isinstance(self.body, dict) and self.body_format == TEXT_FORMAT.JSON):
+        if not isinstance(self.body, basestring) and not (
+                isinstance(self.body, dict) and self.body_format == TEXT_FORMAT.JSON):
             log.warning("invalid type for body: %s", type(self.body))
 
-    def set_body(self, body, body_format=None):
+    def set_body(self, body, body_format=TEXT_FORMAT.TEXT):
         self.body = body
-        if body_format is not None:
-            self.body_format = body_format
+        self.body_format = body_format
 
     def add_lines(self, line_list):
         if not isinstance(line_list, list):
@@ -259,8 +248,6 @@ class ResultSection(dict):
 
     def add_tag(self, tag_type, value, weight=0, usage=None,
                 classification=Classification.UNRESTRICTED, context=None):
-        # tag = {'type': tag_type, 'value': safe_str(value), 'weight': weight, 'usage': usage,
-        #       'classification': classification, 'context': context}
         tag = {'type': tag_type, 'value': safe_str(value), 'classification': classification, 'context': context}
 
         for existing_tag in self.tags:
@@ -282,7 +269,6 @@ class ResultSection(dict):
         section.parent = self
 
     def finalize(self, depth=0):
-
         if self.finalized:
             raise Exception("Double finalize() on result detected.")
         self.finalized = True
@@ -300,19 +286,17 @@ class ResultSection(dict):
         # At this point, all subsections are finalized and we're not deleting ourself
         if self.parent is not None:
             try:
-                # self.parent.classification = \
-                #     Classification.max_classification(self.classification, self.parent.classification)
+                self.parent.classification = \
+                    Classification.max_classification(self.classification, self.parent.classification)
                 self.parent.score += self.score
                 for tag in self.tags:
-                    self.parent.add_tag(tag['type'], tag['value'], tag['weight'], usage=tag['usage'],
-                                        classification=tag['classification'], context=tag['context'])
+                    self.parent.add_tag(tag['type'], tag['value'], classification=tag['classification'], context=tag['context'])
             except InvalidClassification as e:
                 log.error("Failed to finalize section due to a classification error: %s" % e.message)
                 keep_me = False
 
         self.pop('tags')
         self.pop('parent')
-        self.pop('subsections')
         return keep_me
 
     def __getattribute__(self, attr):
@@ -328,7 +312,6 @@ class ResultSection(dict):
 
 
 class Result(dict):
-
     """
     Top-level service result wrapper, some convenience methods for
     adding tags, subsections, etc.
@@ -343,16 +326,18 @@ class Result(dict):
 
     allowed = ('tags',
                'tags_score',
+               'classification',
                'score',
                'file_id',
                'sections',
-               'section_id',
                'filename',
                'status',
                'order_by_score',
                'default_usage',
                'truncated',
-               'context')
+               'context',
+               'temp_section_id',
+               'temp_list')
 
     def __init__(self,
                  tags=None,
@@ -364,24 +349,24 @@ class Result(dict):
         super(Result, self).__init__()
         self.tags = tags or []
         # self.tags_score = 0
-        # self.classification = classification
+        self.classification = classification
         self.score = score
         self.sections = sections or []
+        self.temp_list = []
         self.order_by_score = False
         # self.default_usage = default_usage
         self.truncated = False
+        self.temp_section_id = 0
         # self.context = None
 
     def append_tag(self, tag):
-        assert(isinstance(tag, Tag))
+        assert (isinstance(tag, Tag))
         self.add_tag(tag.tag_type, tag.value, tag.weight, usage=tag.usage,
                      classification=tag.classification,
                      context=tag.context)
 
     def add_tag(self, tag_type, value, weight=0, usage=None,
                 classification=Classification.UNRESTRICTED, context=None):
-        # tag = {'type': tag_type, 'value': safe_str(value), 'weight': weight, 'usage': usage,
-        #       'classification': classification, 'context': context}
         tag = {'type': tag_type, 'value': safe_str(value), 'classification': classification, 'context': context}
 
         for existing_tag in self.tags:
@@ -396,11 +381,11 @@ class Result(dict):
         self.add_section(section, on_top=on_top)
 
     def add_section(self, section, on_top=False):
-        """try:
+        try:
             self.classification = Classification.max_classification(section.classification, self.classification)
         except InvalidClassification as e:
             log.error("Failed to add section due to a classification error: %s" % e.message)
-            return"""
+            return
 
         if on_top:
             self.sections.insert(0, section)
@@ -408,13 +393,12 @@ class Result(dict):
             self.sections.append(section)
         self.score += section.score
 
-    '''def report_heuristic(self, heur):
+    def report_heuristic(self, heur):
         # type: (Heuristic) -> None
+        from assemblyline.common.heuristics import Heuristic
         if isinstance(heur, Heuristic):
             tag = {'type': TAG_TYPE.HEURISTIC,
                    'value': safe_str(heur.id),
-                   'weight': 0,
-                   'usage': TAG_USAGE.IDENTIFICATION,
                    'classification': heur.classification,
                    'context': None}
         else:
@@ -425,11 +409,11 @@ class Result(dict):
             if existing_tag['type'] == tag['type'] and existing_tag['value'] == tag['value']:
                 return
 
-        self.tags.append(tag)'''
+        self.tags.append(tag)
 
     def finalize(self):
         self.score = 0
-        # self.classification = Classification.UNRESTRICTED
+        self.classification = Classification.UNRESTRICTED
         to_delete_sections = []
         to_delete_tags = []
 
@@ -438,24 +422,17 @@ class Result(dict):
             if not section.finalize():
                 to_delete_sections.append(section)
 
-        # TODO: validate tag classification with the aggregate classification for the Result
-        '''for tag in self.tags:
+        for tag in self.tags:
             try:
                 self.classification = Classification.max_classification(tag['classification'], self.classification)
-                #self.tags_score += tag['weight']
+                # self.tags_score += tag['weight']
             except InvalidClassification as e:
                 log.error("Failed to keep tag due to a classification error: %s" % e.message)
-                to_delete_tags.append(tag)'''
+                to_delete_tags.append(tag)
 
         # Delete sections we can't keep
         for section in to_delete_sections:
             self.sections.remove(section)
-
-        # Assign section_id and parent_section_id
-        self.assign_section_id(self.sections)
-
-        # Flatten result sections
-        self.sections = self.flatten_list(self.sections)
 
         # Delete tags we can't keep
         for tag in to_delete_tags:
@@ -464,35 +441,61 @@ class Result(dict):
         if self.order_by_score:
             self.sections.sort(cmp=lambda x, y: cmp(x['score'], y['score']), reverse=True)
         self.pop('order_by_score')
+
+        # Assign section IDs
+        self.assign_section_id(self.sections)
+        self.pop('temp_section_id')
+
+        # Flatten subsections
+        self.flatten_subsections(self.sections)
+        self.sections = self.temp_list
+        self.pop('temp_list')
+
+        # Set empty 'body' strings to None for ODM compatibility
+        for section in self.sections:
+            if not section.body:
+                section.body = None
+
         return self
-
-    def assign_section_id(self, lis):
-        section_id = 1
-        for item in lis:
-            if isinstance(item, list):
-                self.assign_section_id(item)
-            else:
-                item.section_id = section_id
-                section_id += 1
-
-    def flatten_list(self, lis):
-        new_lis = []
-        for item in lis:
-            parent_section_id = item.section_id
-            if isinstance(item, list):
-                new_lis.extend(self.flatten_list(item))
-            else:
-                new_lis.append(item)
-                item.parent_section_id = parent_section_id
-        return new_lis
 
     def order_results_by_score(self):
         self.order_by_score = True
-        
+
     def set_truncated(self):
         if not self.truncated:
             self.truncated = True
             self.add_tag(TAG_TYPE.FILE_SUMMARY, 'Truncated Result', TAG_WEIGHT.NULL)
+
+    def assign_section_id(self, sect):
+        if hasattr(sect, 'subsections'):
+            if len(sect.subsections) != 0:
+                for item in sect.subsections:
+                    self.temp_section_id += 1
+                    item.section_id = self.temp_section_id
+                    item.parent_section_id = sect.section_id
+                    self.assign_section_id(item)
+        else:
+            for item in sect:
+                self.temp_section_id += 1
+                item.section_id = self.temp_section_id
+                item.parent_section_id = 0
+                self.assign_section_id(item)
+
+    def flatten_subsections(self, sect):
+        if hasattr(sect, 'subsections'):
+            if len(sect.subsections) != 0:
+                for item in sect.subsections:
+                    temp_item = item
+                    temp_item.pop('subsections')
+                    self.temp_list.append(temp_item)
+                    self.flatten_subsections(item)
+                    pass
+        else:
+            for item in sect:
+                temp_item = item
+                popped = temp_item.pop('subsections')
+                self.temp_list.append(temp_item)
+                self.flatten_subsections(popped)
 
     def __getattribute__(self, attr):
         if attr in self:
