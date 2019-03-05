@@ -4,6 +4,8 @@ import requests
 import sys
 import time
 import pickle
+import cgi
+import os
 
 from json import dumps, loads
 from base64 import b64decode
@@ -28,6 +30,7 @@ RETRY_FOREVER = 0
 SEARCHABLE = ('alert', 'file', 'result', 'signature', 'submission')
 SUPPORTED_API = 'v1'
 
+
 def as_python_object(dct):
     if '_python_object' in dct:
         return pickle.loads(b64decode(dct['_python_object'].encode('utf-8')))
@@ -42,6 +45,18 @@ def _bool_to_param_string(b):
 
 def _convert(response):
     return response.json()['api_response']
+
+
+def _decode_multipart(response):
+    from requests_toolbelt.multipart import decoder
+    multipart_data = decoder.MultipartDecoder.from_response(response)
+    return multipart_data
+
+
+def _encode_multipart(fields):
+    from requests_toolbelt.multipart.encoder import MultipartEncoder
+    multipart_data = MultipartEncoder(fields=fields)
+    return multipart_data
 
 
 def _join_param(k, v):
@@ -146,9 +161,9 @@ class Client(object):
         )
 
         self.help = Help(self._connection)
-        self.job = Job(self._connection)
+        self.identify = Identify(self._connection)
         self.log = Log(self._connection)
-        self.service = Service(self._connection)
+        self.task = Task(self._connection)
 
         paths = []
         _walk(self, [''], paths)
@@ -163,10 +178,8 @@ class ClientError(Exception):
         self.status_code = status_code
 
 
-# noinspection PyPackageRequirements
 class Connection(object):
-    # noinspection PyUnresolvedReferences
-    def __init__(  # pylint: disable=R0913
+    def __init__(
         self, server, debug, headers, retries
     ):
 
@@ -175,7 +188,6 @@ class Connection(object):
         self.server = server
 
         session = requests.Session()
-
         session.headers.update({'content-type': 'application/json'})
 
         if headers:
@@ -194,10 +206,16 @@ class Connection(object):
     def download(self, path, process, **kw):
         return self.request(self.session.get, path, process, **kw)
 
+    def download_multipart(self, path, **kw):
+        return self.request(self.session.get, path, _decode_multipart, **kw)
+
     def get(self, path, **kw):
         return self.request(self.session.get, path, _convert, **kw)
 
     def post(self, path, **kw):
+        return self.request(self.session.post, path, _convert, **kw)
+
+    def post_multipart(self, path, **kw):
         return self.request(self.session.post, path, _convert, **kw)
 
     def request(self, func, path, process, **kw):
@@ -227,12 +245,22 @@ class Help(object):
 
         # Decode nested list into list of tuples for StringTable
         new_dict = {}
+        stringtables = ["FILE_SUMMARY", "STANDARD_TAG_CONTEXTS", "STANDARD_TAG_TYPES"]
         for x in ret:
-            temp_list = []
-            for y in ret[x]:
-                temp_list.append((str(y[0]), int(y[1])))
-            new_dict[x] = temp_list
-        return new_dict
+            if x in stringtables:
+                temp_list = []
+                for y in ret[x]:
+                    temp_list.append((str(y[0]), int(y[1])))
+                new_dict[x] = temp_list
+
+        new_dict['RECOGNIZED_TAGS'] = ret['RECOGNIZED_TAGS']
+        self.RECOGNIZED_TAGS = ret['RECOGNIZED_TAGS']
+        self.RULE_PATH = ret['RULE_PATH']
+        self.STANDARD_TAG_TYPES = new_dict['STANDARD_TAG_TYPES']
+        self.FILE_SUMMARY = new_dict['FILE_SUMMARY']
+        self.STANDARD_TAG_CONTEXTS = new_dict['STANDARD_TAG_CONTEXTS']
+
+        return self
 
     def get_system_configuration(self, static=False):
         request = {
@@ -241,13 +269,15 @@ class Help(object):
         return self._connection.get(_path('help/configuration'), data=dumps(request))
 
 
-class Job(object):
+class Identify(object):
     def __init__(self, connection):
         self._connection = connection
 
-    def get(self):
-        request = {}
-        return self._connection.post(_path('job/get'), data=dumps(request))
+    def get_fileinfo(self, path):
+        request = {
+            'path': str(path)
+        }
+        return self._connection.post(_path('identify/fileinfo'), data=dumps(request))
 
 
 class Log(object):
@@ -282,7 +312,60 @@ class Log(object):
         return self._connection.post(_path('log/error'), data=dumps(request))
 
 
-class Service(object):
+class Task(object):
     def __init__(self, connection):
         self._connection = connection
 
+    def get_task(self, service_version, file_required=True, path=None):
+        request = {
+            'service_version': service_version
+        }
+        print(service_version)
+
+        multipart_data = self._connection.download_multipart(_path('task/get'), data=dumps(request))
+        task_json_data = None
+        for part in multipart_data.parts:
+            value, params = cgi.parse_header(part.headers['Content-Disposition'])
+            if params['name'] == 'task_json':
+                task_json_data = part.content
+            else:
+                if file_required:
+                    path = os.path.join(path, params['filename'])
+                    _stream(path)
+
+        if task_json_data:
+            return loads(task_json_data)['msg']
+
+    def done_task(self, result):
+        fields = {}
+
+        # Add the results JSON
+        result_json = dumps(result)
+        fields['result_json'] = ('result.json', result_json, 'application/json')
+
+        # Add the extracted files
+        for file in result['response']['extracted']:
+            fields[file['sha256']] = (file['sha256'], open(file['name']), 'plain/txt')
+            print(file['name'])
+
+        # Add the supplementary files
+        for file in result['response']['supplementary']:
+            fields[file['sha256']] = (file['sha256'], open(file['name']), 'plain/txt')
+            print(file['name'])
+
+        from requests_toolbelt.multipart.encoder import MultipartEncoder
+        data = MultipartEncoder(fields=fields)
+        headers = {'content-type': data.content_type}
+
+        path = _path('task/done')
+        url = '/'.join((self._connection.server, path))
+        r = requests.post(url, data=data, headers=headers)
+
+        return r.json()['api_response']
+
+    def get_file(self, sha256, output=None):
+        path = _path('task/file', sha256)
+
+        if output:
+            return self._connection.download(path, _stream(output))
+        return self._connection.download(path, _raw)
