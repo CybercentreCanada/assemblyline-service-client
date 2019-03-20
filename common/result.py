@@ -1,4 +1,5 @@
 import logging
+import os
 
 from assemblyline.common.classification import Classification, InvalidClassification
 from assemblyline.common.context import Context
@@ -9,8 +10,8 @@ from svc_client import Client
 
 import traceback
 
-# TODO: auth
-svc_client = Client("http://0.0.0.0:5000")
+svc_api_host = os.environ['SERVICE_API_HOST']
+svc_client = Client(svc_api_host)
 
 constants = svc_client.help.get_systems_constants()
 

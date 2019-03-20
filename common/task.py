@@ -17,6 +17,7 @@ class Task(object):
         self.score = 0
         self.service_name = None
         self.service_version = None
+        self.service_tool_version = None
         self.sha1 = task['fileinfo']['sha1']
         self.sha256 = task['fileinfo']['sha256']
         self.sid = task['sid']
@@ -24,11 +25,11 @@ class Task(object):
         self.supplementary = []
         self.tag = task['fileinfo']['type']
 
-    def add_extracted(self, name, description, sha256=None, classification=None):
-        if name is None:
+    def add_extracted(self, path, description, name, classification, sha256, normalize=lambda x: x):
+        if None in (path, sha256):
             return False
-        if not sha256:
-            return False
+        if not name:
+            name = normalize(path)
         if self.extracted is None:
             self.clear_extracted()
         limit = self.max_extracted
@@ -36,29 +37,30 @@ class Task(object):
             return False
         if not classification:
             classification = self.classification
-        self.extracted.append(self.add_child(name, sha256, description, classification))
+        self.extracted.append(self.add_child(name, sha256, description, classification, path))
         return True
 
-    def add_supplementary(self, name, description, sha256=None, classification=None):
-        if name is None:
+    def add_supplementary(self, path, description, name, classification, sha256, normalize=lambda x: x):
+        if None in (path, sha256):
             return False
-        if not sha256:
-            return False
-        if self.extracted is None:
-            self.clear_extracted()
-        limit = self.max_extracted
-        if limit and len(self.extracted) >= int(limit):
+        if not name:
+            name = normalize(path)
+        if self.supplementary is None:
+            self.clear_supplementary()
+        limit = self.max_supplementary
+        if limit and len(self.supplementary) >= int(limit):
             return False
         if not classification:
             classification = self.classification
-        self.supplementary.append(self.add_child(name, sha256, description, classification))
+        self.supplementary.append(self.add_child(name, sha256, description, classification, path))
         return True
 
-    def add_child(self, name, sha256, description, classification):
+    def add_child(self, name, sha256, description, classification, path):
         return {'name': name,
                 'sha256': sha256,
                 'description': description,
-                'classification': classification
+                'classification': classification,
+                'path': path
                 }
 
     def as_service_result(self):
@@ -83,6 +85,7 @@ class Task(object):
                          'milestones': self.milestones,
                          'service_name': self.service_name,
                          'service_version': self.service_version,
+                         'service_tool_version': self.service_tool_version or 'empty',
                          'supplementary': self.supplementary
                          }
         return self.response
@@ -111,6 +114,7 @@ class Task(object):
             except:
                 self.score = 0
 
-    def watermark(self, service_name, service_version):
+    def watermark(self, service_name, service_version, service_tool_version):
         self.service_name = service_name
         self.service_version = service_version
+        self.service_tool_version = service_tool_version

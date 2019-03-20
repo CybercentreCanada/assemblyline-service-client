@@ -1,6 +1,9 @@
+import os
+
 from svc_client import Client
 
-svc_client = Client("http://0.0.0.0:5000")
+svc_api_host = os.environ['SERVICE_API_HOST']
+svc_client = Client(svc_api_host)
 
 
 def get_classification():

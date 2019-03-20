@@ -47,10 +47,16 @@ class MockAssemblyline(ModuleType):
         import assemblyline.common as common
         from assemblyline.common import str_utils
         common.charset = str_utils
+        common.charset.__name__ = 'assemblyline.common.charset'
         self.common = common
         from common import mock_forge
         common.forge = mock_forge
         common.forge.__name__ = 'assemblyline.common.forge'
+
+        # TODO: for testing only
+        from common import identify
+        common.identify = identify
+        common.identify.__name__ = 'assemblyline.common.identify'
 
 
 class MockAssemblyline2AlCommon(ModuleType):
@@ -86,6 +92,7 @@ def modules1():
     sys.modules['assemblyline.common'] = mock_al.common
     sys.modules['assemblyline.common.charset'] = mock_al.common.charset
     sys.modules['assemblyline.common.forge'] = mock_al.common.forge
+    sys.modules['assemblyline.common.identify'] = mock_al.common.identify  # TODO: added for testing only b/c current v4 version is incompatible
 
 
 def modules2():
