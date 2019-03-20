@@ -289,12 +289,29 @@ class Log(object):
             raise ClientError('You need to provide the name of the logger.', 400)
 
         self.log = log
+        return self
 
-    def info(self, msg):
+    def debug(self, msg):
         request = {
             'log': self.log,
             'msg': msg
         }
+        return self._connection.post(_path('log/debug'), data=dumps(request))
+
+    def error(self, msg):  # TODO: log with stacktrace and also do another api for terminal error
+        request = {
+            'log': self.log,
+            'msg': msg
+        }
+        return self._connection.post(_path('log/error'), data=dumps(request))
+
+    def info(self, msg, params):
+        msg = msg.replace("%s", params)
+        request = {
+            'log': self.log,
+            'msg': msg
+        }
+
         return self._connection.post(_path('log/info'), data=dumps(request))
 
     def warning(self, msg):
@@ -304,23 +321,18 @@ class Log(object):
         }
         return self._connection.post(_path('log/warning'), data=dumps(request))
 
-    def error(self, msg):  # TODO: log with stacktrace and also do another api for terminal error
-        request = {
-            'log': self.log,
-            'msg': msg
-        }
-        return self._connection.post(_path('log/error'), data=dumps(request))
-
 
 class Task(object):
     def __init__(self, connection):
         self._connection = connection
 
-    def get_task(self, service_version, file_required=True, path=None):
+    def get_task(self, service_name, service_version, service_tool_version, file_required, path=None):
         request = {
-            'service_version': service_version
+            'service_name': service_name,
+            'service_version': service_version,
+            'service_tool_version': service_tool_version,
+            'file_required': file_required
         }
-        print(service_version)
 
         multipart_data = self._connection.download_multipart(_path('task/get'), data=dumps(request))
         task_json_data = None
@@ -330,28 +342,34 @@ class Task(object):
                 task_json_data = part.content
             else:
                 if file_required:
-                    path = os.path.join(path, params['filename'])
-                    _stream(path)
+                    file_path = os.path.join(path, params['filename'])
+                    with open(file_path, 'wb') as file:
+                        file.write(part.content)
+                        file.close()
 
         if task_json_data:
-            return loads(task_json_data)['msg']
+            return loads(task_json_data)
 
-    def done_task(self, result):
+    def done_task(self, task, result):
         fields = {}
+
+        # Add the extracted files
+        for file in result['response']['extracted']:
+            fields[file['sha256']] = (file['sha256'], open(file['path']), 'plain/txt')
+            del file['path']
+
+        # Add the supplementary files
+        for file in result['response']['supplementary']:
+            fields[file['sha256']] = (file['sha256'], open(file['path']), 'plain/txt')
+            del file['path']
+
+        # Add the task JSON
+        task_json = dumps(task)
+        fields['task_json'] = ('task.json', task_json, 'application/json')
 
         # Add the results JSON
         result_json = dumps(result)
         fields['result_json'] = ('result.json', result_json, 'application/json')
-
-        # Add the extracted files
-        for file in result['response']['extracted']:
-            fields[file['sha256']] = (file['sha256'], open(file['name']), 'plain/txt')
-            print(file['name'])
-
-        # Add the supplementary files
-        for file in result['response']['supplementary']:
-            fields[file['sha256']] = (file['sha256'], open(file['name']), 'plain/txt')
-            print(file['name'])
 
         from requests_toolbelt.multipart.encoder import MultipartEncoder
         data = MultipartEncoder(fields=fields)
