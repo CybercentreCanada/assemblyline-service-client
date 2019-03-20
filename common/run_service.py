@@ -1,168 +1,61 @@
 #!/usr/bin/env python
 
-# A Quick and Dirty test harness for services.
-#
-# Usage: python ./run_service ./input_file
+# Run a standalone AL service
 
-import json
 import logging
-import os
-import platform
-import pprint
 import sys
-import time
+import os
 
-from itertools import chain
-from types import ModuleType
-
-# from assemblyline.common.identify import fileinfo
 from assemblyline.common.importing import load_module_by_path
-from common import result
+from common.task import Task
 
-# from assemblyline.al.common.importing import service_by_name
-# from assemblyline.al.common.task import Task
-# from assemblyline.al.testing import mocks
+from svc_client import Client
+from common.mock_modules import modules1, modules2
+modules1()
+modules2()
 
-
-class MockAssemblylineAlService(ModuleType):
-    def __init__(self):
-        super(MockAssemblylineAlService, self).__init__('assemblyline.al.service')
-        import common.base
-        self.base = common.base
-        self.base.__name__ = 'assemblyline.al.service.base'
+logger = logging.getLogger('assemblyline.run_service')
+logging.basicConfig(format='%(process)d-%(levelname)s-%(message)s')
 
 
-class MockAssemblylineAlCommon(ModuleType):
-    def __init__(self):
-        super(MockAssemblylineAlCommon, self).__init__('assemblyline.al.common')
-        import common.result
-        self.result = common.result
-        self.result.__name__ = 'assemblyline.al.common.result'
-
-
-class MockAssemblylineAl(ModuleType):
-    def __init__(self):
-        super(MockAssemblylineAl, self).__init__('assemblyline.al')
-        self.common = MockAssemblylineAlCommon()
-        self.common.__name__ = 'assemblyline.al.common'
-        self.service = MockAssemblylineAlService()
-        self.service.__name__ = 'assemblyline.al.service'
-
-
-class MockAssemblyline(ModuleType):
-    def __init__(self):
-        super(MockAssemblyline, self).__init__('assemblyline')
-        self.al = MockAssemblylineAl()
-        self.al.__name__ = 'assemblyline.al'
-
-
-mock_al = MockAssemblyline()
-sys.modules['assemblyline'] = mock_al
-sys.modules['assemblyline.al'] = mock_al.al
-sys.modules['assemblyline.al.common'] = mock_al.al.common
-sys.modules['assemblyline.al.common.result'] = mock_al.al.common.result
-sys.modules['assemblyline.al.service.base'] = mock_al.al.service.base
-
-
-def scan_file(svc_class, task, **kwargs):
+def run_service(svc_client, svc_class):
     logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
 
-    # Don't use srl normalization for filenames (i.e. 1/2/3/4/1234mysha256)
-
-    # We use mocks for dispatcher, restore store etc that will inject the results into
-    # these lists.
-
-    dispatch_result_collector = mocks.MockDispatchCollector()
-    result_store_good = {}
-    result_store_bad = {}
-    children = []
-    supplementary = []
-
-    cfg = forge.get_datastore().get_service(svc_class.SERVICE_NAME).get("config", {})
-
-    import functools
-    forge.get_filestore = functools.partial(mocks.get_local_transport, '.')
-    forge.get_submit_client = functools.partial(mocks.get_mock_submit_client, children, supplementary)
-    forge.get_dispatch_queue = lambda: dispatch_result_collector
-    forge.get_datastore = functools.partial(
-            mocks.get_mock_result_store,
-            result_store_good,
-            result_store_bad)
-
-    service = svc_class(cfg)
+    service = svc_class(cfg=None)
     service.start_service()
 
-    # Run all inputs through the service. Children will end up in the children list,
-    # results will end up in the results list. Actual fleshed out service results
-    # will be in riak.
-    
-    start = time.time()
-    if service.BATCH_SERVICE:
-        service._handle_task_batch([task, ])
-    else:
-        service._handle_task(task)
-    end = time.time()
-    duration = end - start
-    print('Duration: %s' % duration)
-
-    (serviced_ok,
-     serviced_fail_recover,
-     serviced_fail_nonrecover) = dispatch_result_collector.get_serviced_results()
-
-    for response in chain(serviced_ok, serviced_fail_recover, serviced_fail_nonrecover):
-        # TODO: we should be able to find it by key in our result_store_good
-        if 'response' in response and 'cache_key' in response['response']:
-            if response['response']['cache_key'] not in result_store_good:
-                print("Appear to be missing result in result store")
-        pprint.pprint(response)
-
-    for (_key, full_result) in result_store_good.items():
-        if full_result and 'result' in full_result:
-            pprint.pprint(full_result)
-            json.dumps(full_result, ensure_ascii=True).encode('utf-8')
-
-    service.stop_service()
+    try:
+        while True:
+            # Get task
+            task = Task(svc_client.task.get_task(service_name=service.service_name(),
+                                                 service_version=service.get_service_version(),
+                                                 service_tool_version=service.get_tool_version(),
+                                                 file_required=service.SERVICE_FILE_REQUIRED,
+                                                 path=service.working_directory))
+            service._handle_task(task)
+    except KeyboardInterrupt:
+        logging.info("run service log")
+        print("Exiting.")
+    finally:
+        service.stop_service()
 
 
 def main():
-    from argparse import ArgumentParser
-    parser = ArgumentParser()
-    parser.add_argument('service_name')
-    parser.add_argument('sample')
-    args = parser.parse_args()
+    svc_api_host = os.environ['SERVICE_API_HOST']
+    name = os.environ['SERVICE_PATH']
 
-    name = args.service_name
-    svc_class = load_module_by_path(name)
-    
-    filename = args.sample
-    if not os.path.isfile(filename):
-        print('Invalid input file: %s' % filename)
-        exit(3)
-    
-    # TODO: get fileinfo: fi = fileinfo(filename)
-    # TODO: Create task object using api
-    # task = Task.create(srl=sha256, ignore_cache=True, submitter='local_soak_test', **kwargs)
-    
+    svc_name = name.split(".")[-1].lower()
+    logger = logging.getLogger('assemblyline.svc.%s' % svc_name)
+    logger.setLevel(logging.DEBUG)
 
-    sha256 = fi['sha256']
-    # The transport expects the filename to be the sha256.
-    # Create a symlink if required.
-    created_link = False
-    if filename != sha256:
-        try:
-            if platform.system() == 'Windows':
-                import shutil
-                shutil.copyfile(filename, sha256)
-            else:
-                os.symlink(filename, sha256)
-        except Exception as ex:
-            print('exception trying to link file: %s' % str(ex))
-        created_link = True
+    svc_client = Client(svc_api_host)
 
-    scan_file(svc_class, task, **fi)
+    try:
+        svc_class = load_module_by_path(name)
+    except:
+        raise
 
-    if created_link:
-        os.unlink(sha256)
+    run_service(svc_client, svc_class)
 
 
 if __name__ == '__main__':
