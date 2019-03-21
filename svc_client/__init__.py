@@ -6,9 +6,12 @@ import time
 import pickle
 import cgi
 import os
+import logging
 
 from json import dumps, loads
 from base64 import b64decode
+
+from common import log
 
 __all__ = ['Client', 'ClientError']
 
@@ -26,7 +29,7 @@ except ImportError:
     from urllib.parse import quote  # pylint: disable=E0611,F0401
 
 INVALID_STREAM_SEARCH_PARAMS = ('cursorMark', 'rows', 'sort')
-RETRY_FOREVER = 0
+RETRIES = 10
 SEARCHABLE = ('alert', 'file', 'result', 'signature', 'submission')
 SUPPORTED_API = 'v1'
 
@@ -154,7 +157,7 @@ def _walk(obj, path, paths):
 class Client(object):
     def __init__(  # pylint: disable=R0913
         self, server, debug=lambda x: None,
-        headers=None, retries=RETRY_FOREVER
+        headers=None, retries=RETRIES
     ):
         self._connection = Connection(
             server, debug, headers, retries
@@ -182,10 +185,11 @@ class Connection(object):
     def __init__(
         self, server, debug, headers, retries
     ):
-
+        log.init_logging(log_level=logging.INFO)
         self.debug = debug
         self.max_retries = retries
         self.server = server
+        self.log = logging.getLogger('assemblyline.service_client')
 
         session = requests.Session()
         session.headers.update({'content-type': 'application/json'})
@@ -220,17 +224,19 @@ class Connection(object):
 
     def request(self, func, path, process, **kw):
         self.debug(path)
-
         retries = 0
-        while self.max_retries < 1 or retries <= self.max_retries:
-            if retries:
-                time.sleep(min(2, 2 ** (retries - 7)))
-            response = func('/'.join((self.server, path)), **kw)
-
-            if response.ok:
-                return process(response)
-
-            retries += 1
+        while True:
+            try:
+                response = func('/'.join((self.server, path)), **kw)
+                if response.ok:
+                    return process(response)
+            except requests.RequestException:
+                self.log.warning("No connection to service server, retying...")
+                if retries < self.max_retries:
+                    time.sleep(retries)
+                else:
+                    time.sleep(self.max_retries)
+                retries += 1
 
 
 class Help(object):
