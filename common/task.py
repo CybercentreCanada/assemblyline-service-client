@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+from easydict import EasyDict
 
 class Task(object):
     """Task objects are an abstraction layer over a task (dict) received from the dispatcher"""
@@ -8,6 +9,7 @@ class Task(object):
         self.original_task = task
         self.classification = None
         self.deep_scan = False
+        self.drop_file = False
         self.extracted = []
         self.max_extracted = 100  # TODO: get from task
         self.max_supplementary = 100  # TODO: get from task
@@ -15,6 +17,7 @@ class Task(object):
         self.response = {}
         self.result = {}
         self.score = 0
+        self.service_config = task['service_config']
         self.service_name = None
         self.service_version = None
         self.service_tool_version = None
@@ -56,12 +59,12 @@ class Task(object):
         return True
 
     def add_child(self, name, sha256, description, classification, path):
-        return {'name': name,
-                'sha256': sha256,
-                'description': description,
-                'classification': classification,
-                'path': path
-                }
+        return EasyDict({'display_name': name,
+                         'sha256': sha256,
+                         'description': description,
+                         'classification': classification,
+                         'path': path
+                         })
 
     def as_service_result(self):
         if not self.extracted:
@@ -74,6 +77,7 @@ class Task(object):
             self.get_response()
 
         result = {'classification': self.classification,
+                  'drop_file': self.drop_file,
                   'response': self.response,
                   'result': self.result,
                   'sha256': self.sha256
@@ -96,6 +100,9 @@ class Task(object):
     def clear_supplementary(self):
         self.supplementary = []
 
+    def drop(self):
+        self.drop_file = True
+
     def set_milestone(self, name, value):
         if not self.milestones:
             self.milestones = {}
@@ -105,6 +112,9 @@ class Task(object):
         # Assign aggregate classification for the result based on max classification of tags and result sections
         self.classification = self.result['classification']
         del self.result['classification']
+
+        for item in range(len(self.extracted)):
+            self.extracted[item]['name'] = self.extracted[item].pop('display_name')
 
         # TODO: self.score not used for anything right now
         self.score = 0
@@ -118,3 +128,9 @@ class Task(object):
         self.service_name = service_name
         self.service_version = service_version
         self.service_tool_version = service_tool_version
+
+    def get_service_params(self, service_name):
+        if not service_name or not self.service_config:
+            return {}
+
+        return self.service_config.get(service_name, {})

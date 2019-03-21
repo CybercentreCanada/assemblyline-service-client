@@ -231,7 +231,7 @@ class Connection(object):
                 if response.ok:
                     return process(response)
             except requests.RequestException:
-                self.log.warning("No connection to service server, retying...")
+                self.log.warning("No connection to service server, retrying...")
                 if retries < self.max_retries:
                     time.sleep(retries)
                 else:

@@ -52,6 +52,12 @@ class MockAssemblyline(ModuleType):
         from common import mock_forge
         common.forge = mock_forge
         common.forge.__name__ = 'assemblyline.common.forge'
+        from common import reaper
+        common.reaper = reaper
+        common.reaper.__name__ = 'assemblyline.common.reaper'
+        from common import timeout
+        common.timeout = timeout
+        common.timeout.__name__ = 'assemblyline.common.timeout'
 
         # TODO: for testing only
         from common import identify
@@ -62,7 +68,7 @@ class MockAssemblyline(ModuleType):
 class MockAssemblyline2AlCommon(ModuleType):
     def __init__(self):
         super(MockAssemblyline2AlCommon, self).__init__('assemblyline.al.common')
-        from assemblyline.common import heuristics
+        from common import heuristics
         self.heuristics = heuristics
         self.heuristics.__name__ = 'assemblyline.al.common.heuristics'
 
@@ -92,7 +98,10 @@ def modules1():
     sys.modules['assemblyline.common'] = mock_al.common
     sys.modules['assemblyline.common.charset'] = mock_al.common.charset
     sys.modules['assemblyline.common.forge'] = mock_al.common.forge
-    sys.modules['assemblyline.common.identify'] = mock_al.common.identify  # TODO: added for testing only b/c current v4 version is incompatible
+    sys.modules['assemblyline.common.identify'] = mock_al.common.identify
+    sys.modules['assemblyline.common.reaper'] = mock_al.common.reaper
+    sys.modules['assemblyline.common.timeout'] = mock_al.common.timeout
+
 
 
 def modules2():

@@ -4,13 +4,14 @@ import sys
 import tempfile
 import time
 import shutil
-import json
+import logging
 
 from assemblyline.common import net
 from assemblyline.common.classification import Classification
 from assemblyline.common import digests
 from assemblyline.common import version
 from common.result import Result
+from common import log
 # from assemblyline.remote.datatypes.hash import ExpiringHash
 # from assemblyline.remote.datatypes.counters import Counters
 from svc_client import Client
@@ -111,12 +112,13 @@ class ServiceBase(object):
     def __init__(self, cfg=None):
         # Start with default config and override that with anything provided.
         self.cfg = self.SERVICE_DEFAULT_CONFIG.copy()
-        print(self.cfg)
         if cfg:
             self.cfg.update(cfg)
 
+        log.init_logging(log_level=logging.INFO)
+
         # Initialize non trivial members in start_service rather than __init__.
-        self.log = svc_client.log(log='assemblyline.svc.%s' % self.service_name().lower())
+        self.log = logging.getLogger('assemblyline.svc.%s' % self.service_name().lower())
         self.counters = None
         self.dispatch_queue = None
         self.result_store = None
@@ -281,7 +283,7 @@ class ServiceBase(object):
             return None
 
         res = svc_client.task.done_task(task=task.original_task, result=task.as_service_result())
-        print("saving result="+res)
+        self.log.info("Saving result="+res)
 
     def _cleanup_working_directory(self):
         try:
@@ -390,7 +392,7 @@ class ServiceRequest(object):
             name, text, display_name, classification or self._svc.SERVICE_CLASSIFICATION, sha256
         )
 
-    def add_supplementary(self, name, text, display_name=None, classification=None, sha256=None):
+    def add_supplementary(self, name, text, display_name='', classification=None, sha256=None):
         if not sha256:
             sha256 = digests.get_sha256_for_file(name)
 
@@ -414,3 +416,15 @@ class ServiceRequest(object):
 
     def tempfile(self, sha256):
         return os.path.join(self._svc.working_directory, sha256)
+
+    def get_param(self, name):
+        # Does the parameter exist in the class?
+        params_code = [x for x in self._svc.SERVICE_DEFAULT_SUBMISSION_PARAMS if x["name"] == name]
+        params = [x for x in self.task.service_config if x == name]
+        if params:
+            return params[0]
+        else:
+            return params_code[0]['value']
+
+    def drop(self):
+        self.task.drop()
