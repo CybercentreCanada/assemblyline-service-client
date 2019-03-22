@@ -752,8 +752,8 @@ if __name__ == '__main__':
         name = sys.stdin.readline().strip()
         while name:
             a = fileinfo(name)
-            print '\t'.join(dotdump(str(a[k])) for k in ('path', 'tag', 'ascii',
+            print('\t'.join(dotdump(str(a[k])) for k in ('path', 'tag', 'ascii',
                                                          'entropy', 'hex', 'magic',
                                                          'mime', 'md5', 'sha1', 'sha256',
-                                                         'ssdeep', 'size'))
+                                                         'ssdeep', 'size')))
             name = sys.stdin.readline().strip()
