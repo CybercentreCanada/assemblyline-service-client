@@ -7,31 +7,22 @@ import pickle
 import cgi
 import os
 import logging
+import tempfile
 
 from json import dumps, loads
 from base64 import b64decode
+from urllib.parse import quote
 
-from common import log
+from assemblyline.common import log
 
 __all__ = ['Client', 'ClientError']
 
-try:
-    # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
-    basestring
-except NameError:
-    # noinspection PyShadowingBuiltins
-    basestring = str  # pylint: disable=W0622
-
-try:
-    from urllib2 import quote
-except ImportError:
-    # noinspection PyUnresolvedReferences
-    from urllib.parse import quote  # pylint: disable=E0611,F0401
-
-INVALID_STREAM_SEARCH_PARAMS = ('cursorMark', 'rows', 'sort')
-RETRIES = 10
-SEARCHABLE = ('alert', 'file', 'result', 'signature', 'submission')
+# INVALID_STREAM_SEARCH_PARAMS = ('cursorMark', 'rows', 'sort')
+MAX_RETRY_BACKOFF = 10
+# SEARCHABLE = ('alert', 'file', 'result', 'signature', 'submission')
 SUPPORTED_API = 'v1'
+
+log.init_logging(log_level=logging.INFO)
 
 
 def as_python_object(dct):
@@ -76,9 +67,8 @@ def _join_params(q, l):
     return '&'.join([quote(q)] + [_join_param(*e) for e in l if _param_ok(e)])
 
 
-# noinspection PyProtectedMember
 def _kw(*ex):
-    local_frames = sys._getframe().f_back.f_locals  # pylint: disable=W0212
+    local_frames = sys._getframe().f_back.f_locals
     return {
         k: _bool_to_param_string(v) for k, v in local_frames.items() if k not in ex
     }
@@ -88,10 +78,9 @@ def _kw(*ex):
 #
 #     /api/v1/<class_name>/<method_name>/[arg1/[arg2/[...]]][?k1=v1[...]]
 #
-# noinspection PyProtectedMember
 def _magic_path(obj, *args, **kw):
     c = obj.__class__.__name__.lower()
-    m = sys._getframe().f_back.f_code.co_name  # pylint:disable=W0212
+    m = sys._getframe().f_back.f_code.co_name
 
     return _path('/'.join((c, m)), *args, **kw)
 
@@ -121,7 +110,7 @@ def _raw(response):
 def _stream(output):
     def _do_stream(response):
         f = output
-        if isinstance(output, basestring):
+        if isinstance(output, str):
             f = open(output, 'wb')
         for chunk in response.iter_content(chunk_size=1024):
             if chunk:
@@ -155,17 +144,16 @@ def _walk(obj, path, paths):
 
 
 class Client(object):
-    def __init__(  # pylint: disable=R0913
+    def __init__(
         self, server, debug=lambda x: None,
-        headers=None, retries=RETRIES
+        headers=None, retry_backoff=MAX_RETRY_BACKOFF
     ):
         self._connection = Connection(
-            server, debug, headers, retries
+            server, debug, headers, retry_backoff
         )
 
         self.help = Help(self._connection)
         self.identify = Identify(self._connection)
-        self.log = Log(self._connection)
         self.task = Task(self._connection)
 
         paths = []
@@ -183,11 +171,10 @@ class ClientError(Exception):
 
 class Connection(object):
     def __init__(
-        self, server, debug, headers, retries
+        self, server, debug, headers, retry_backoff
     ):
-        log.init_logging(log_level=logging.INFO)
         self.debug = debug
-        self.max_retries = retries
+        self.retry_backoff = retry_backoff
         self.server = server
         self.log = logging.getLogger('assemblyline.service_client')
 
@@ -202,7 +189,7 @@ class Connection(object):
         r = self.request(self.session.get, 'api/', _convert)
         s = {SUPPORTED_API}
         if not isinstance(r, list) or not set(r).intersection(s):
-            raise ClientError("Supported API (%s) not available" % s, 0)
+            raise ClientError(f"Supported API ({s}) not available", 0)
 
     def delete(self, path, **kw):
         return self.request(self.session.delete, path, _convert, **kw)
@@ -232,10 +219,10 @@ class Connection(object):
                     return process(response)
             except requests.RequestException:
                 self.log.warning("No connection to service server, retrying...")
-                if retries < self.max_retries:
+                if retries < self.retry_backoff:
                     time.sleep(retries)
                 else:
-                    time.sleep(self.max_retries)
+                    time.sleep(self.retry_backoff)
                 retries += 1
 
 
@@ -286,53 +273,14 @@ class Identify(object):
         return self._connection.post(_path('identify/fileinfo'), data=dumps(request))
 
 
-class Log(object):
-    def __init__(self, connection):
-        self._connection = connection
-
-    def __call__(self, log=None):
-        if log is None:
-            raise ClientError('You need to provide the name of the logger.', 400)
-
-        self.log = log
-        return self
-
-    def debug(self, msg):
-        request = {
-            'log': self.log,
-            'msg': msg
-        }
-        return self._connection.post(_path('log/debug'), data=dumps(request))
-
-    def error(self, msg):  # TODO: log with stacktrace and also do another api for terminal error
-        request = {
-            'log': self.log,
-            'msg': msg
-        }
-        return self._connection.post(_path('log/error'), data=dumps(request))
-
-    def info(self, msg, params):
-        msg = msg.replace("%s", params)
-        request = {
-            'log': self.log,
-            'msg': msg
-        }
-
-        return self._connection.post(_path('log/info'), data=dumps(request))
-
-    def warning(self, msg):
-        request = {
-            'log': self.log,
-            'msg': msg
-        }
-        return self._connection.post(_path('log/warning'), data=dumps(request))
-
-
 class Task(object):
     def __init__(self, connection):
         self._connection = connection
+        self.log = logging.getLogger('assemblyline.service_client')
 
-    def get_task(self, service_name, service_version, service_tool_version, file_required, path=None):
+    def get_task(self, service_name, service_version, service_tool_version, file_required):
+        self.log.info(f'Getting task for: {service_name}')
+
         request = {
             'service_name': service_name,
             'service_version': service_version,
@@ -341,48 +289,46 @@ class Task(object):
         }
 
         multipart_data = self._connection.download_multipart(_path('task/get'), data=dumps(request))
-        task_json_data = None
+
+        # Load the task.json
+        task = None
         for part in multipart_data.parts:
             value, params = cgi.parse_header(part.headers['Content-Disposition'])
             if params['name'] == 'task_json':
-                task_json_data = part.content
-            else:
-                if file_required:
-                    file_path = os.path.join(path, params['filename'])
-                    with open(file_path, 'wb') as file:
-                        file.write(part.content)
-                        file.close()
+                task = loads(part.content)
 
-        if task_json_data:
-            return loads(task_json_data)
+        if task:
+            folder_path = os.path.join(tempfile.gettempdir(), service_name.lower(), task['sid'])
+            self.log.info(f"Task received for: {task['service_name']}, saving task to: {folder_path}")
+
+            # Download the task.json and the file to be processed (if required)
+            for part in multipart_data.parts:
+                value, params = cgi.parse_header(part.headers['Content-Disposition'])
+                file_path = os.path.join(folder_path, params['filename'])
+                with open(file_path, 'wb') as file:
+                    file.write(part.content)
+                    file.close()
 
     def done_task(self, task, result):
+        self.log.info(f"Task completed by: {task['service_name']}, SID: {task['sid']}")
+        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task['sid'])
+
         fields = {}
 
-        # Add the extracted files
-        for file in result['response']['extracted']:
-            fields[file['sha256']] = (file['sha256'], open(file['path']), 'plain/txt')
-            del file['path']
+        # Add the extracted and supplementary files to the response
+        for file in result['response']['extracted'] + result['response']['supplementary']:
+            file_path = os.path.join(folder_path, file['name'])
+            fields[file['sha256']] = (file['sha256'], open(file_path), 'plain/txt')
 
-        # Add the supplementary files
-        for file in result['response']['supplementary']:
-            fields[file['sha256']] = (file['sha256'], open(file['path']), 'plain/txt')
-            del file['path']
-
-        # Add the task JSON
-        task_json = dumps(task)
-        fields['task_json'] = ('task.json', task_json, 'application/json')
-
-        # Add the results JSON
-        result_json = dumps(result)
-        fields['result_json'] = ('result.json', result_json, 'application/json')
+        # Add the task and result JSON to the response
+        fields['task_json'] = ('task.json', dumps(task), 'application/json')
+        fields['result_json'] = ('result.json', dumps(result), 'application/json')
 
         from requests_toolbelt.multipart.encoder import MultipartEncoder
         data = MultipartEncoder(fields=fields)
         headers = {'content-type': data.content_type}
 
-        path = _path('task/done')
-        url = '/'.join((self._connection.server, path))
+        url = '/'.join((self._connection.server, _path('task/done')))
         r = requests.post(url, data=data, headers=headers)
 
         return r.json()['api_response']
