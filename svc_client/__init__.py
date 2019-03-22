@@ -12,6 +12,7 @@ import tempfile
 from json import dumps, loads
 from base64 import b64decode
 from urllib.parse import quote
+from easydict import EasyDict
 
 from assemblyline.common import log
 
@@ -237,23 +238,24 @@ class Help(object):
         ret = self._connection.get(_path('help/constants'))
 
         # Decode nested list into list of tuples for StringTable
-        new_dict = {}
+        temp = {}
         stringtables = ["FILE_SUMMARY", "STANDARD_TAG_CONTEXTS", "STANDARD_TAG_TYPES"]
         for x in ret:
             if x in stringtables:
                 temp_list = []
                 for y in ret[x]:
                     temp_list.append((str(y[0]), int(y[1])))
-                new_dict[x] = temp_list
+                temp[x] = temp_list
 
-        new_dict['RECOGNIZED_TAGS'] = ret['RECOGNIZED_TAGS']
-        self.RECOGNIZED_TAGS = ret['RECOGNIZED_TAGS']
-        self.RULE_PATH = ret['RULE_PATH']
-        self.STANDARD_TAG_TYPES = new_dict['STANDARD_TAG_TYPES']
-        self.FILE_SUMMARY = new_dict['FILE_SUMMARY']
-        self.STANDARD_TAG_CONTEXTS = new_dict['STANDARD_TAG_CONTEXTS']
+        temp['RECOGNIZED_TAGS'] = ret['RECOGNIZED_TAGS']
+        constants = {'RECOGNIZED_TAGS': ret['RECOGNIZED_TAGS'],
+                     'RULE_PATH': ret['RULE_PATH'],
+                     'STANDARD_TAG_TYPES': temp['STANDARD_TAG_TYPES'],
+                     'FILE_SUMMARY': temp['FILE_SUMMARY'],
+                     'STANDARD_TAG_CONTEXTS': temp['STANDARD_TAG_CONTEXTS']
+                     }
 
-        return self
+        return EasyDict(constants)
 
     def get_system_configuration(self, static=False):
         request = {
