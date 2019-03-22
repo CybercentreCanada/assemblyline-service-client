@@ -1,2 +1,1 @@
-cython
 requests_toolbelt
