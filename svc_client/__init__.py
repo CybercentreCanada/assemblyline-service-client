@@ -12,7 +12,6 @@ import tempfile
 from json import dumps, loads
 from base64 import b64decode
 from urllib.parse import quote
-from easydict import EasyDict
 
 from assemblyline.common import log
 
@@ -23,7 +22,7 @@ MAX_RETRY_BACKOFF = 10
 # SEARCHABLE = ('alert', 'file', 'result', 'signature', 'submission')
 SUPPORTED_API = 'v1'
 
-log.init_logging(log_level=logging.INFO)
+log.init_logging('assemblyline.service_client', log_level=logging.INFO)
 
 
 def as_python_object(dct):
@@ -121,29 +120,6 @@ def _stream(output):
     return _do_stream
 
 
-def _walk(obj, path, paths):
-    if isinstance(obj, int):
-        return
-    for m in dir(obj):
-        mobj = getattr(obj, m)
-        if m == '__call__':
-            doc = str(mobj.__doc__)
-            if doc in (
-                'x.__call__(...) <==> x(...)',
-                'Call self as a function.'
-            ):
-                doc = str(obj.__doc__)
-            doc = doc.split("\n\n", 1)[0]
-            doc = re.sub(r'\s+', ' ', doc.strip())
-            if doc != 'For internal use.':
-                paths.append(['.'.join(path), doc])
-            continue
-        elif m.startswith('_') or m.startswith('im_'):
-            continue
-
-        _walk(mobj, path + [m], paths)
-
-
 class Client(object):
     def __init__(
         self, server, debug=lambda x: None,
@@ -156,12 +132,6 @@ class Client(object):
         self.help = Help(self._connection)
         self.identify = Identify(self._connection)
         self.task = Task(self._connection)
-
-        paths = []
-        _walk(self, [''], paths)
-
-        self.__doc__ = 'Client provides the following methods:\n\n' + \
-            '\n'.join(['\n'.join(p + ['']) for p in paths])
 
 
 class ClientError(Exception):
@@ -255,7 +225,7 @@ class Help(object):
                      'STANDARD_TAG_CONTEXTS': temp['STANDARD_TAG_CONTEXTS']
                      }
 
-        return EasyDict(constants)
+        return constants
 
     def get_system_configuration(self, static=False):
         request = {
@@ -293,23 +263,29 @@ class Task(object):
         multipart_data = self._connection.download_multipart(_path('task/get'), data=dumps(request))
 
         # Load the task.json
-        task = None
-        for part in multipart_data.parts:
-            value, params = cgi.parse_header(part.headers['Content-Disposition'])
-            if params['name'] == 'task_json':
-                task = loads(part.content)
+        task = loads(multipart_data.parts[0].content)
 
         if task:
             folder_path = os.path.join(tempfile.gettempdir(), service_name.lower(), task['sid'])
+            if not os.path.isdir(folder_path):
+                os.makedirs(folder_path)
             self.log.info(f"Task received for: {task['service_name']}, saving task to: {folder_path}")
 
             # Download the task.json and the file to be processed (if required)
-            for part in multipart_data.parts:
-                value, params = cgi.parse_header(part.headers['Content-Disposition'])
-                file_path = os.path.join(folder_path, params['filename'])
-                with open(file_path, 'wb') as file:
-                    file.write(part.content)
-                    file.close()
+            file_path = os.path.join(folder_path, 'task.json')
+            with open(file_path, 'wb') as f:
+                f.write(multipart_data.parts[0].content)
+                f.close()
+
+            # Download the file to be processed (if required by service)
+            if file_required:
+                file_sha256 = task['fileinfo']['sha256']
+                file_path = os.path.join(folder_path, file_sha256)
+                with open(file_path, 'wb') as f:
+                    f.write(multipart_data.parts[1].content)
+                    f.close()
+
+            return task
 
     def done_task(self, task, result):
         self.log.info(f"Task completed by: {task['service_name']}, SID: {task['sid']}")
