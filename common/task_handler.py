@@ -8,15 +8,16 @@ import os
 import time
 import yaml
 import tempfile
+import shutil
 
 from watchdog.observers import Observer
-from watchdog.events import PatternMatchingEventHandler
+from watchdog.events import FileSystemEventHandler
 
 from assemblyline.common import log
 
 from svc_client import Client
 
-log.init_logging('assemblyline.task_handler', log_level=logging.INFO)
+log.init_logging('assemblyline.task_handler', log_level=logging.DEBUG)
 log = logging.getLogger('assemblyline.task_handler')
 
 svc_api_host = os.environ['SERVICE_API_HOST']
@@ -26,12 +27,47 @@ svc_api_host = os.environ['SERVICE_API_HOST']
 
 svc_client = Client(svc_api_host)
 
-os.system('python /opt/alv4/alv3_service/common/run_service.py')
+result_found = False
 
 
-def done_task(task, result):
-    svc_client.task.done_task(task=task,
-                              result=result)
+class MyHandler(FileSystemEventHandler):
+    def __init__(self, observer):
+        object.__init__(self)
+        self.observer = observer
+
+    def process(self, event):
+        """
+        event.event_type
+            'modified' | 'created' | 'moved' | 'deleted'
+        event.is_directory
+            True | False
+        event.src_path
+            path/to/observed/file
+        """
+        global result_found
+
+        # the file will be processed there
+        log.info(event.src_path)
+        log.info(event.event_type)
+        self.observer.stop()
+        log.info("stopped")
+        result_found = True
+
+    def on_modified(self, event):
+        self.process(event)
+
+    def on_created(self, event):
+        # self.process(event)
+        pass
+
+
+def done_task(task, result, folder_path):
+    try:
+        svc_client.task.done_task(task=task,
+                                  result=result)
+    finally:
+        if os.path.isdir(folder_path):
+            shutil.rmtree(folder_path)
 
 
 def get_classification(yml_classification=None):
@@ -60,9 +96,9 @@ def get_systems_constants(json_constants=None):
 
 def get_task(service_config):
     task = svc_client.task.get_task(service_name=service_config['SERVICE_NAME'],
-                             service_version=service_config['SERVICE_VERSION'],
-                             service_tool_version=service_config['TOOL_VERSION'],
-                             file_required=service_config['SERVICE_FILE_REQUIRED'])
+                                    service_version=service_config['SERVICE_VERSION'],
+                                    service_tool_version=service_config['TOOL_VERSION'],
+                                    file_required=service_config['SERVICE_FILE_REQUIRED'])
     return task
 
 
@@ -84,61 +120,27 @@ def get_service_config(yml_config=None):
 
 
 def task_handler(service_config):
-    def on_created(event):
-        # This function is called when a file is created
-        log.info(f"on_created, {event.src_path} has been created!")
-        file_path = os.path.join(folder_path, 'results.json')
+    task = get_task(service_config)
+    my_observer = Observer()
+    my_event_handler = MyHandler(my_observer)
 
-        if event.src_path == file_path:
-            log.info('result.json found!')
-            my_observer.stop()
-            my_observer.join()
+    # Create an observer
+    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task['sid'])
+    go_recursively = True
 
-    def on_deleted(event):
-        # This function is called when a file is deleted
-        log.info(f"on_deleted, {event.src_path}!")
+    my_observer.schedule(my_event_handler, folder_path, recursive=go_recursively)
 
-    def on_modified(event):
-        # This function is called when a file is modified
-        log.info(f"on_modified, {event.src_path} has been modified")
+    # Start the observer
+    my_observer.start()
 
-    def on_moved(event):
-        # This function is called when a file is moved
-        log.info(f"on_moved, {event.src_path} to {event.dest_path}")
+    while not result_found:
+        log.debug(f'Waiting for result.json in: {folder_path}')
+        time.sleep(1)
 
-    patterns = "*"
-    ignore_patterns = ""
-    ignore_directories = False
-    case_sensitive = True
-
-    while True:
-        task = get_task(service_config)
-
-        my_event_handler = PatternMatchingEventHandler(patterns, ignore_patterns, ignore_directories, case_sensitive)
-
-        my_event_handler.on_created = on_created
-        my_event_handler.on_deleted = on_deleted
-        my_event_handler.on_modified = on_modified
-        my_event_handler.on_moved = on_moved
-
-        # Create an observer
-        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task['sid'])
-        go_recursively = True
-
-        my_observer = Observer()
-        my_observer.schedule(my_event_handler, folder_path, recursive=go_recursively)
-
-        # Start the observer
-        my_observer.start()
-        log.info(f'Waiting for result.json in: {folder_path}')
-
-        while True:
-            time.sleep(0.5)
-
-        log.info('calling done_task')
-        result_json_path = os.path.join(folder_path, 'result.json')
-        result = json.load(result_json_path)
-        done_task(task, result)
+    result_json_path = os.path.join(folder_path, 'result.json')
+    with open(result_json_path, 'r') as f:
+        result = json.load(f)
+    done_task(task, result, folder_path)
 
 
 if __name__ == '__main__':
