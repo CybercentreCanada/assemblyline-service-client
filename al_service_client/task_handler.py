@@ -15,7 +15,7 @@ from watchdog.events import FileSystemEventHandler
 
 from assemblyline.common import log
 
-from svc_client import Client
+from al_service_client import Client
 
 log.init_logging('assemblyline.task_handler', log_level=logging.DEBUG)
 log = logging.getLogger('assemblyline.task_handler')

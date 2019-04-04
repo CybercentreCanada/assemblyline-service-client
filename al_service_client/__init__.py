@@ -295,8 +295,10 @@ class Task(object):
 
         # Add the extracted and supplementary files to the response
         for file in result['response']['extracted'] + result['response']['supplementary']:
-            file_path = os.path.join(folder_path, file['name'])
+            file_path = os.path.join(folder_path, file['path'])
             fields[file['sha256']] = (file['sha256'], open(file_path), 'plain/txt')
+            self.log.info('extracted file::'+file_path)
+            del file['path']
 
         # Add the task and result JSON to the response
         fields['task_json'] = ('task.json', dumps(task), 'application/json')
