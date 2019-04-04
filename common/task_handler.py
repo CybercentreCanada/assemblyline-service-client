@@ -79,7 +79,7 @@ def get_classification(yml_classification=None):
     # Get classification definition and save it
     classification = svc_client.help.get_classification_definition()
     with open(yml_classification, 'w') as fh:
-        yaml.dump(classification, fh)
+        yaml.safe_dump(classification, fh)
 
 
 def get_systems_constants(json_constants=None):
@@ -89,12 +89,12 @@ def get_systems_constants(json_constants=None):
         json_constants = "/etc/assemblyline/constants.json"
 
         # Get system constants and save it
-        cosntants = svc_client.help.get_systems_constants()
+        constants = svc_client.help.get_systems_constants()
         with open(json_constants, 'w') as fh:
-            json.dump(cosntants, fh)
+            json.dump(constants, fh)
 
 
-def get_task(service_config):
+def get_task():
     task = svc_client.task.get_task(service_name=service_config['SERVICE_NAME'],
                                     service_version=service_config['SERVICE_VERSION'],
                                     service_tool_version=service_config['TOOL_VERSION'],
@@ -104,23 +104,21 @@ def get_task(service_config):
 
 def get_service_config(yml_config=None):
     if yml_config is None:
-        # service_path = os.environ['SERVICE_PATH']
-
         yml_config = "/etc/assemblyline/service_config.yml"
 
     # Load from the yaml config
     while True:
         log.info('Trying to load service config YAML...')
         if os.path.exists(yml_config):
-            with open(yml_config) as yml_fh:
-                service_config = yaml.safe_load(yml_fh.read())
-            return service_config
+            with open(yml_config, 'r') as yml_fh:
+                yaml_config = yaml.safe_load(yml_fh)
+            return yaml_config
         else:
             time.sleep(5)
 
 
-def task_handler(service_config):
-    task = get_task(service_config)
+def task_handler():
+    task = get_task()
     my_observer = Observer()
     my_event_handler = MyHandler(my_observer)
 
@@ -146,6 +144,5 @@ def task_handler(service_config):
 if __name__ == '__main__':
     get_classification()
     get_systems_constants()
-    service = get_service_config()
-
-    task_handler(service)
+    service_config = get_service_config()
+    task_handler()
