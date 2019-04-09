@@ -5,17 +5,16 @@
 import json
 import logging
 import os
-import time
-import yaml
-import tempfile
 import shutil
+import tempfile
+import time
 
-from watchdog.observers import Observer
+import yaml
 from watchdog.events import FileSystemEventHandler
-
-from assemblyline.common import log
+from watchdog.observers import Observer
 
 from al_service_client import Client
+from assemblyline.common import log
 
 log.init_logging('assemblyline.task_handler', log_level=logging.DEBUG)
 log = logging.getLogger('assemblyline.task_handler')
@@ -61,7 +60,8 @@ class MyHandler(FileSystemEventHandler):
         pass
 
 
-def done_task(task, result, folder_path):
+def done_task(task, result):
+    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed')
     try:
         svc_client.task.done_task(task=task,
                                   result=result)
@@ -118,27 +118,29 @@ def get_service_config(yml_config=None):
 
 
 def task_handler():
-    task = get_task()
-    my_observer = Observer()
-    my_event_handler = MyHandler(my_observer)
+    while True:
+        task = get_task()
+        my_observer = Observer()
+        my_event_handler = MyHandler(my_observer)
 
-    # Create an observer
-    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task['sid'])
-    go_recursively = True
+        # Create an observer
+        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed', task['sid'])
+        if not os.path.isdir(folder_path):
+            os.makedirs(folder_path)
 
-    my_observer.schedule(my_event_handler, folder_path, recursive=go_recursively)
+        my_observer.schedule(my_event_handler, folder_path, recursive=True)
 
-    # Start the observer
-    my_observer.start()
+        # Start the observer
+        my_observer.start()
 
-    while not result_found:
-        log.debug(f'Waiting for result.json in: {folder_path}')
-        time.sleep(1)
+        while not result_found:
+            log.debug(f'Waiting for result.json in: {folder_path}')
+            time.sleep(1)
 
-    result_json_path = os.path.join(folder_path, 'result.json')
-    with open(result_json_path, 'r') as f:
-        result = json.load(f)
-    done_task(task, result, folder_path)
+        result_json_path = os.path.join(folder_path, 'result.json')
+        with open(result_json_path, 'r') as f:
+            result = json.load(f)
+        done_task(task, result)
 
 
 if __name__ == '__main__':

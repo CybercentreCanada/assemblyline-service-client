@@ -1,25 +1,20 @@
-
-import re
-import requests
-import sys
-import time
-import pickle
-import cgi
-import os
 import logging
+import os
+import pickle
+import sys
 import tempfile
-
-from json import dumps, loads
+import time
 from base64 import b64decode
+from json import dumps, loads
 from urllib.parse import quote
+
+import requests
 
 from assemblyline.common import log
 
 __all__ = ['Client', 'ClientError']
 
-# INVALID_STREAM_SEARCH_PARAMS = ('cursorMark', 'rows', 'sort')
 MAX_RETRY_BACKOFF = 10
-# SEARCHABLE = ('alert', 'file', 'result', 'signature', 'submission')
 SUPPORTED_API = 'v1'
 
 log.init_logging('assemblyline.service_client', log_level=logging.INFO)
@@ -266,7 +261,7 @@ class Task(object):
         task = loads(multipart_data.parts[0].content)
 
         if task:
-            folder_path = os.path.join(tempfile.gettempdir(), service_name.lower(), task['sid'])
+            folder_path = os.path.join(tempfile.gettempdir(), service_name.lower(), 'received', task['sid'])
             if not os.path.isdir(folder_path):
                 os.makedirs(folder_path)
             self.log.info(f"Task received for: {task['service_name']}, saving task to: {folder_path}")
@@ -296,8 +291,8 @@ class Task(object):
         # Add the extracted and supplementary files to the response
         for file in result['response']['extracted'] + result['response']['supplementary']:
             file_path = os.path.join(folder_path, file['path'])
-            fields[file['sha256']] = (file['sha256'], open(file_path), 'plain/txt')
-            self.log.info('extracted file::'+file_path)
+            with open(file_path, 'r', encoding='ISO-8859-1') as f:
+                fields[file['sha256']] = (file['sha256'], f.read(), 'plain/txt')
             del file['path']
 
         # Add the task and result JSON to the response
