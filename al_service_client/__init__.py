@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import pickle
@@ -261,7 +262,8 @@ class Task(object):
         task = loads(multipart_data.parts[0].content)
 
         if task:
-            folder_path = os.path.join(tempfile.gettempdir(), service_name.lower(), 'received', task['sid'])
+            task_hash = hashlib.md5(str(task['sid'] + task['fileinfo']['sha256']).encode('utf-8')).hexdigest()
+            folder_path = os.path.join(tempfile.gettempdir(), service_name.lower(), 'received', task_hash)
             if not os.path.isdir(folder_path):
                 os.makedirs(folder_path)
             self.log.info(f"Task received for: {task['service_name']}, saving task to: {folder_path}")
@@ -291,9 +293,11 @@ class Task(object):
         # Add the extracted and supplementary files to the response
         for file in result['response']['extracted'] + result['response']['supplementary']:
             file_path = os.path.join(folder_path, file['path'])
-            with open(file_path, 'r', encoding='ISO-8859-1') as f:
-                fields[file['sha256']] = (file['sha256'], f.read(), 'plain/txt')
+            #  encoding='ISO-8859-1'
+            with open(file_path, 'rb') as f:
+                fields[file['sha256']] = (file['sha256'], f.read(), file['mime'])
             del file['path']
+            del file['mime']
 
         # Add the task and result JSON to the response
         fields['task_json'] = ('task.json', dumps(task), 'application/json')

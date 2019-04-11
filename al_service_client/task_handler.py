@@ -2,6 +2,7 @@
 
 # Run a standalone AL service
 
+import hashlib
 import json
 import logging
 import os
@@ -9,14 +10,13 @@ import shutil
 import tempfile
 import time
 
+import pyinotify
 import yaml
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
 
 from al_service_client import Client
 from assemblyline.common import log
 
-log.init_logging('assemblyline.task_handler', log_level=logging.DEBUG)
+log.init_logging('assemblyline.task_handler', log_level=logging.INFO)
 log = logging.getLogger('assemblyline.task_handler')
 
 svc_api_host = os.environ['SERVICE_API_HOST']
@@ -29,42 +29,22 @@ svc_client = Client(svc_api_host)
 result_found = False
 
 
-class MyHandler(FileSystemEventHandler):
-    def __init__(self, observer):
-        object.__init__(self)
-        self.observer = observer
-
-    def process(self, event):
-        """
-        event.event_type
-            'modified' | 'created' | 'moved' | 'deleted'
-        event.is_directory
-            True | False
-        event.src_path
-            path/to/observed/file
-        """
+class EventHandler(pyinotify.ProcessEvent):
+    def process_IN_CREATE(self, event):
         global result_found
+        if 'result.json' in event.pathname:
+            result_found = True
+        log.info(f'Creating: {event.pathname}')
 
-        # the file will be processed there
-        log.info(event.src_path)
-        log.info(event.event_type)
-        self.observer.stop()
-        log.info("stopped")
-        result_found = True
-
-    def on_modified(self, event):
-        self.process(event)
-
-    def on_created(self, event):
-        # self.process(event)
-        pass
+    def process_IN_DELETE(self, event):
+        log.info(f'Removing: {event.pathname}')
 
 
-def done_task(task, result):
-    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed')
+def done_task(task, result, task_hash):
+    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed', task_hash)
     try:
-        svc_client.task.done_task(task=task,
-                                  result=result)
+        msg = svc_client.task.done_task(task=task, result=result)
+        log.info('RESULT OF DONE_TASK:: '+msg)
     finally:
         if os.path.isdir(folder_path):
             shutil.rmtree(folder_path)
@@ -118,29 +98,39 @@ def get_service_config(yml_config=None):
 
 
 def task_handler():
-    while True:
-        task = get_task()
-        my_observer = Observer()
-        my_event_handler = MyHandler(my_observer)
+    global result_found
 
-        # Create an observer
-        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed', task['sid'])
-        if not os.path.isdir(folder_path):
-            os.makedirs(folder_path)
+    try:
+        wm = pyinotify.WatchManager()  # Watch Manager
+        mask = pyinotify.IN_DELETE | pyinotify.IN_CREATE  # watched events
 
-        my_observer.schedule(my_event_handler, folder_path, recursive=True)
+        notifier = pyinotify.ThreadedNotifier(wm, EventHandler())
+        notifier.start()
 
-        # Start the observer
-        my_observer.start()
+        while True:
+            task = get_task()
 
-        while not result_found:
-            log.debug(f'Waiting for result.json in: {folder_path}')
-            time.sleep(1)
+            task_hash = hashlib.md5(str(task['sid'] + task['fileinfo']['sha256']).encode('utf-8')).hexdigest()
+            folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed', task_hash)
+            if not os.path.isdir(folder_path):
+                os.makedirs(folder_path)
 
-        result_json_path = os.path.join(folder_path, 'result.json')
-        with open(result_json_path, 'r') as f:
-            result = json.load(f)
-        done_task(task, result)
+            wdd = wm.add_watch(folder_path, mask, rec=False)
+
+            while not result_found:
+                #log.info(f'Waiting for result.json in: {folder_path}')
+                time.sleep(0.1)
+
+            result_found = False
+            wm.rm_watch(list(wdd.values()))
+
+            result_json_path = os.path.join(folder_path, 'result.json')
+            with open(result_json_path, 'r') as f:
+                result = json.load(f)
+                log.info(str(result))
+            done_task(task, result, task_hash)
+    finally:
+        notifier.stop()
 
 
 if __name__ == '__main__':
