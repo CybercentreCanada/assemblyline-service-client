@@ -31,6 +31,7 @@ sio = socketio.Client()
 wm = pyinotify.WatchManager()  # Watch Manager
 
 result_found = False
+wait_start = None
 
 
 @sio.on('connect', namespace='/tasking')
@@ -45,14 +46,21 @@ def on_disconnect():
 
 
 def callback_wait_for_task():
+    global wait_start
+
     log.info(f"Server aware we are waiting for task for service: {service_name}[{service_version}]")
+
+    wait_start = time.time()
 
 
 @sio.on('got_task', namespace='/tasking')
 def on_got_task(task):
-    global result_found
+    global result_found, wait_start
 
-    sio.emit('got_task', namespace='/tasking')
+    start_time = time.time()
+    idle_time = int((start_time-wait_start)*1000)
+
+    sio.emit('got_task', (service_name, idle_time), namespace='/tasking')
 
     task_hash = hashlib.md5(str(task['sid'] + task['fileinfo']['sha256']).encode('utf-8')).hexdigest()
 
@@ -86,6 +94,9 @@ def on_got_task(task):
     with open(result_json_path, 'r') as f:
         result = json.load(f)
     done_task(task, result, task_hash)
+
+    exec_time = int((wait_start-start_time)*1000)
+    sio.emit('done_task', (service_name, exec_time), namespace='/tasking')
 
     sio.emit('wait_for_task', (service_name, service_version, service_tool_version), namespace='/tasking', callback=callback_wait_for_task)
 
