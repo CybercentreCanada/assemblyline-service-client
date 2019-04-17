@@ -312,9 +312,10 @@ class Task(object):
 
         return r.json()['api_response']
 
-    def get_file(self, sha256, output=None):
+    def get_file(self, sha256, file_path):
         path = _path('task/file', sha256)
+        multipart_data = self._connection.download_multipart(path)
 
-        if output:
-            return self._connection.download(path, _stream(output))
-        return self._connection.download(path, _raw)
+        with open(file_path, 'wb') as f:
+            f.write(multipart_data.parts[0].content)
+            f.close()

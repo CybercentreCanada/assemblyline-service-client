@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import socketio
 import tempfile
 import time
 
@@ -25,23 +26,80 @@ svc_api_host = os.environ['SERVICE_API_HOST']
 # svc_name = name.split(".")[-1].lower()
 
 svc_client = Client(svc_api_host)
+sio = socketio.Client()
+
+wm = pyinotify.WatchManager()  # Watch Manager
 
 result_found = False
+
+
+@sio.on('connect', namespace='/tasking')
+def on_connect():
+    log.info('Connected to tasking socketIO server')
+    sio.emit('wait_for_task', (service_name, service_version, service_tool_version), namespace='/tasking', callback=callback_wait_for_task)
+
+
+@sio.on('disconnect', namespace='/tasking')
+def on_disconnect():
+    log.info('Disconnected from the socketIO server')
+
+
+def callback_wait_for_task():
+    log.info(f"Server aware we are waiting for task for service: {service_name}[{service_version}]")
+
+
+@sio.on('got_task', namespace='/tasking')
+def on_got_task(task):
+    global result_found
+
+    sio.emit('got_task', namespace='/tasking')
+
+    task_hash = hashlib.md5(str(task['sid'] + task['fileinfo']['sha256']).encode('utf-8')).hexdigest()
+
+    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'received', task_hash)
+    if not os.path.isdir(folder_path):
+        os.makedirs(folder_path)
+
+    # Get file if required by service
+    file_path = os.path.join(folder_path, task['fileinfo']['sha256'])
+    if file_required:
+        svc_client.task.get_file(task['fileinfo']['sha256'], file_path)
+
+    # Save task.json
+    task_json_path = os.path.join(folder_path, 'task.json')
+    with open(task_json_path, 'w') as f:
+        json.dump(task, f)
+
+    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed', task_hash)
+    if not os.path.isdir(folder_path):
+        os.makedirs(folder_path)
+
+    wdd = wm.add_watch(folder_path, pyinotify.IN_CREATE, rec=False)
+
+    while not result_found:
+        time.sleep(0.1)
+
+    result_found = False
+    wm.rm_watch(list(wdd.values()))
+
+    result_json_path = os.path.join(folder_path, 'result.json')
+    with open(result_json_path, 'r') as f:
+        result = json.load(f)
+    done_task(task, result, task_hash)
+
+    sio.emit('wait_for_task', (service_name, service_version, service_tool_version), namespace='/tasking', callback=callback_wait_for_task)
 
 
 class EventHandler(pyinotify.ProcessEvent):
     def process_IN_CREATE(self, event):
         global result_found
+
         if 'result.json' in event.pathname:
             result_found = True
-        log.info(f'Creating: {event.pathname}')
-
-    def process_IN_DELETE(self, event):
-        log.info(f'Removing: {event.pathname}')
 
 
 def done_task(task, result, task_hash):
-    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed', task_hash)
+    folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower())
     try:
         msg = svc_client.task.done_task(task=task, result=result)
         log.info('RESULT OF DONE_TASK:: '+msg)
@@ -74,14 +132,6 @@ def get_systems_constants(json_constants=None):
             json.dump(constants, fh)
 
 
-def get_task():
-    task = svc_client.task.get_task(service_name=service_config['SERVICE_NAME'],
-                                    service_version=service_config['SERVICE_VERSION'],
-                                    service_tool_version=service_config['TOOL_VERSION'],
-                                    file_required=service_config['SERVICE_FILE_REQUIRED'])
-    return task
-
-
 def get_service_config(yml_config=None):
     if yml_config is None:
         yml_config = "/etc/assemblyline/service_config.yml"
@@ -98,37 +148,14 @@ def get_service_config(yml_config=None):
 
 
 def task_handler():
-    global result_found
+    notifier = pyinotify.ThreadedNotifier(wm, EventHandler())
 
     try:
-        wm = pyinotify.WatchManager()  # Watch Manager
-        mask = pyinotify.IN_DELETE | pyinotify.IN_CREATE  # watched events
-
-        notifier = pyinotify.ThreadedNotifier(wm, EventHandler())
         notifier.start()
 
         while True:
-            task = get_task()
-
-            task_hash = hashlib.md5(str(task['sid'] + task['fileinfo']['sha256']).encode('utf-8')).hexdigest()
-            folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed', task_hash)
-            if not os.path.isdir(folder_path):
-                os.makedirs(folder_path)
-
-            wdd = wm.add_watch(folder_path, mask, rec=False)
-
-            while not result_found:
-                #log.info(f'Waiting for result.json in: {folder_path}')
-                time.sleep(0.1)
-
-            result_found = False
-            wm.rm_watch(list(wdd.values()))
-
-            result_json_path = os.path.join(folder_path, 'result.json')
-            with open(result_json_path, 'r') as f:
-                result = json.load(f)
-                log.info(str(result))
-            done_task(task, result, task_hash)
+            sio.connect(svc_api_host, namespaces=['/tasking'])
+            sio.wait()
     finally:
         notifier.stop()
 
@@ -136,5 +163,11 @@ def task_handler():
 if __name__ == '__main__':
     get_classification()
     get_systems_constants()
+
     service_config = get_service_config()
+    service_name = service_config['SERVICE_NAME']
+    service_version = service_config['SERVICE_VERSION']
+    service_tool_version = service_config['TOOL_VERSION']
+    file_required = service_config['SERVICE_FILE_REQUIRED']
+
     task_handler()
