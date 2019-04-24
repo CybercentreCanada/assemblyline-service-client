@@ -86,7 +86,7 @@ def on_got_task(task):
 
     log.info(f"{task['service_name']} task completed, SID: {task['sid']}")
     wm.rm_watch(list(wdd.values()))
-    exec_time = int((wait_start - start_time) * 1000)
+    exec_time = int((time.time() - start_time) * 1000)
 
     result_found = False
     result_json_path = os.path.join(folder_path, 'result.json')
