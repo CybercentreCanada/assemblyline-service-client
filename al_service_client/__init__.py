@@ -206,7 +206,6 @@ class File(object):
             f.close()
 
     def save_file(self, task, result):
-        self.log.info(f"Task completed by: {task['service_name']}, SID: {task['sid']}")
         folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task['sid'])
 
         fields = {}

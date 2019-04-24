@@ -21,9 +21,6 @@ log.init_logging('assemblyline.task_handler', log_level=logging.INFO)
 log = logging.getLogger('assemblyline.task_handler')
 
 svc_api_host = os.environ['SERVICE_API_HOST']
-# name = os.environ['SERVICE_PATH']
-
-# svc_name = name.split(".")[-1].lower()
 
 svc_client = Client(svc_api_host)
 sio = socketio.Client()
@@ -87,6 +84,7 @@ def on_got_task(task):
     while not result_found:
         time.sleep(0.1)
 
+    log.info(f"{task['service_name']} task completed, SID: {task['sid']}")
     wm.rm_watch(list(wdd.values()))
     exec_time = int((wait_start - start_time) * 1000)
 
@@ -98,6 +96,11 @@ def on_got_task(task):
     new_files = result['response']['extracted'] + result['response']['supplementary']
     if new_files:
         save_file(task, result)
+
+    # Cleanup the result
+    for file in new_files:
+        del file['path']
+        del file['mime']
 
     sio.emit('done_task', (service_name, exec_time, task, result), namespace='/tasking')
 
