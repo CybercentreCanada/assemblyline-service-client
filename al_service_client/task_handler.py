@@ -30,7 +30,6 @@ sio = socketio.Client()
 
 wm = pyinotify.WatchManager()  # Watch Manager
 
-error_found = False
 result_found = False
 wait_start = None
 
@@ -56,7 +55,7 @@ def callback_wait_for_task():
 
 @sio.on('got_task', namespace='/tasking')
 def on_got_task(task):
-    global result_found, error_found, wait_start
+    global result_found, wait_start
 
     start_time = time.time()
     idle_time = int((start_time-wait_start)*1000)
@@ -72,7 +71,7 @@ def on_got_task(task):
     # Get file if required by service
     file_path = os.path.join(folder_path, task['fileinfo']['sha256'])
     if file_required:
-        svc_client.task.get_file(task['fileinfo']['sha256'], file_path)
+        svc_client.file.download_file(task['fileinfo']['sha256'], file_path)
 
     # Save task.json
     task_json_path = os.path.join(folder_path, 'task.json')
@@ -85,26 +84,22 @@ def on_got_task(task):
 
     wdd = wm.add_watch(folder_path, pyinotify.IN_CREATE, rec=False)
 
-    while not result_found or error_found:
+    while not result_found:
         time.sleep(0.1)
 
     wm.rm_watch(list(wdd.values()))
     exec_time = int((wait_start - start_time) * 1000)
 
-    if result_found:
-        result_found = False
-        result_json_path = os.path.join(folder_path, 'result.json')
-        with open(result_json_path, 'r') as f:
-            result = json.load(f)
-        sio.emit('done_task', (service_name, exec_time, task, result), namespace='/tasking')
-    elif error_found:
-        error_found = False
-        error_json_path = os.path.join(folder_path, 'error.json')
-        with open(error_json_path, 'r') as f:
-            error = json.load(f)
-        sio.emit('done_task', (service_name, exec_time, task, error), namespace='/tasking')
+    result_found = False
+    result_json_path = os.path.join(folder_path, 'result.json')
+    with open(result_json_path, 'r') as f:
+        result = json.load(f)
 
-    done_task(task, result, task_hash)
+    new_files = result['response']['extracted'] + result['response']['supplementary']
+    if new_files:
+        save_file(task, result)
+
+    sio.emit('done_task', (service_name, exec_time, task, result), namespace='/tasking')
 
     sio.emit('wait_for_task', (service_name, service_version, service_tool_version), namespace='/tasking', callback=callback_wait_for_task)
 
@@ -115,15 +110,13 @@ class EventHandler(pyinotify.ProcessEvent):
 
         if 'result.json' in event.pathname:
             result_found = True
-        elif 'error.json' in event.pathname:
-            error_found = True
 
 
-def done_task(task, result, task_hash):
+def save_file(task, result):
     folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower())
     try:
-        msg = svc_client.task.done_task(task=task, result=result)
-        log.info('RESULT OF DONE_TASK:: '+msg)
+        msg = svc_client.file.save_file(task=task, result=result)
+        log.info('RESULT OF SAVING FILES:: '+msg)
     finally:
         if os.path.isdir(folder_path):
             shutil.rmtree(folder_path)
@@ -188,7 +181,7 @@ if __name__ == '__main__':
     service_config = get_service_config()
     service_name = service_config['SERVICE_NAME']
     service_version = service_config['SERVICE_VERSION']
-    service_tool_version = service_config['TOOL_VERSION']
+    service_tool_version = service_config['SERVICE_TOOL_VERSION']
     file_required = service_config['SERVICE_FILE_REQUIRED']
 
     task_handler()

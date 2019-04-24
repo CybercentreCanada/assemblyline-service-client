@@ -125,9 +125,8 @@ class Client(object):
             server, debug, headers, retry_backoff
         )
 
+        self.file = File(self._connection)
         self.help = Help(self._connection)
-        self.identify = Identify(self._connection)
-        self.task = Task(self._connection)
 
 
 class ClientError(Exception):
@@ -193,6 +192,48 @@ class Connection(object):
                 retries += 1
 
 
+class File(object):
+    def __init__(self, connection):
+        self._connection = connection
+        self.log = logging.getLogger('assemblyline.service_client')
+
+    def download_file(self, sha256, file_path):
+        path = _path('file/download', sha256)
+        multipart_data = self._connection.download_multipart(path)
+
+        with open(file_path, 'wb') as f:
+            f.write(multipart_data.parts[0].content)
+            f.close()
+
+    def save_file(self, task, result):
+        self.log.info(f"Task completed by: {task['service_name']}, SID: {task['sid']}")
+        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task['sid'])
+
+        fields = {}
+
+        # Add the extracted and supplementary files to the response
+        for file in result['response']['extracted'] + result['response']['supplementary']:
+            file_path = os.path.join(folder_path, file['path'])
+            #  encoding='ISO-8859-1'
+            with open(file_path, 'rb') as f:
+                fields[file['sha256']] = (file['sha256'], f.read(), file['mime'])
+            del file['path']
+            del file['mime']
+
+        # Add the task and result JSON to the response
+        fields['task_json'] = ('task.json', dumps(task), 'application/json')
+        fields['result_json'] = ('result.json', dumps(result), 'application/json')
+
+        from requests_toolbelt.multipart.encoder import MultipartEncoder
+        data = MultipartEncoder(fields=fields)
+        headers = {'content-type': data.content_type}
+
+        url = '/'.join((self._connection.server, _path('file/save')))
+        r = requests.post(url, data=data, headers=headers)
+
+        return r.json()['api_response']
+
+
 class Help(object):
     def __init__(self, connection):
         self._connection = connection
@@ -228,94 +269,3 @@ class Help(object):
             'static': static
         }
         return self._connection.get(_path('help/configuration'), data=dumps(request))
-
-
-class Identify(object):
-    def __init__(self, connection):
-        self._connection = connection
-
-    def get_fileinfo(self, path):
-        request = {
-            'path': str(path)
-        }
-        return self._connection.post(_path('identify/fileinfo'), data=dumps(request))
-
-
-class Task(object):
-    def __init__(self, connection):
-        self._connection = connection
-        self.log = logging.getLogger('assemblyline.service_client')
-
-    def get_task(self, service_name, service_version, service_tool_version, file_required):
-        self.log.info(f'Getting task for: {service_name}')
-
-        request = {
-            'service_name': service_name,
-            'service_version': service_version,
-            'service_tool_version': service_tool_version,
-            'file_required': file_required
-        }
-
-        multipart_data = self._connection.download_multipart(_path('task/get'), data=dumps(request))
-
-        # Load the task.json
-        task = loads(multipart_data.parts[0].content)
-
-        if task:
-            task_hash = hashlib.md5(str(task['sid'] + task['fileinfo']['sha256']).encode('utf-8')).hexdigest()
-            folder_path = os.path.join(tempfile.gettempdir(), service_name.lower(), 'received', task_hash)
-            if not os.path.isdir(folder_path):
-                os.makedirs(folder_path)
-            self.log.info(f"Task received for: {task['service_name']}, saving task to: {folder_path}")
-
-            # Download the task.json and the file to be processed (if required)
-            file_path = os.path.join(folder_path, 'task.json')
-            with open(file_path, 'wb') as f:
-                f.write(multipart_data.parts[0].content)
-                f.close()
-
-            # Download the file to be processed (if required by service)
-            if file_required:
-                file_sha256 = task['fileinfo']['sha256']
-                file_path = os.path.join(folder_path, file_sha256)
-                with open(file_path, 'wb') as f:
-                    f.write(multipart_data.parts[1].content)
-                    f.close()
-
-            return task
-
-    def done_task(self, task, result):
-        self.log.info(f"Task completed by: {task['service_name']}, SID: {task['sid']}")
-        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task['sid'])
-
-        fields = {}
-
-        # Add the extracted and supplementary files to the response
-        for file in result['response']['extracted'] + result['response']['supplementary']:
-            file_path = os.path.join(folder_path, file['path'])
-            #  encoding='ISO-8859-1'
-            with open(file_path, 'rb') as f:
-                fields[file['sha256']] = (file['sha256'], f.read(), file['mime'])
-            del file['path']
-            del file['mime']
-
-        # Add the task and result JSON to the response
-        fields['task_json'] = ('task.json', dumps(task), 'application/json')
-        fields['result_json'] = ('result.json', dumps(result), 'application/json')
-
-        from requests_toolbelt.multipart.encoder import MultipartEncoder
-        data = MultipartEncoder(fields=fields)
-        headers = {'content-type': data.content_type}
-
-        url = '/'.join((self._connection.server, _path('task/done')))
-        r = requests.post(url, data=data, headers=headers)
-
-        return r.json()['api_response']
-
-    def get_file(self, sha256, file_path):
-        path = _path('task/file', sha256)
-        multipart_data = self._connection.download_multipart(path)
-
-        with open(file_path, 'wb') as f:
-            f.write(multipart_data.parts[0].content)
-            f.close()
