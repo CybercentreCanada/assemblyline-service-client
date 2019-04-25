@@ -206,18 +206,16 @@ class File(object):
             f.close()
 
     def save_file(self, task, result):
-        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task['sid'])
+        task_hash = hashlib.md5((str(task['sid'] + task['sha256']).encode('utf-8'))).hexdigest()
+        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task_hash, 'completed')
 
         fields = {}
 
         # Add the extracted and supplementary files to the response
         for file in result['response']['extracted'] + result['response']['supplementary']:
-            file_path = os.path.join(folder_path, file['path'])
-            #  encoding='ISO-8859-1'
+            file_path = os.path.join(folder_path, file['name'])
             with open(file_path, 'rb') as f:
-                fields[file['sha256']] = (file['sha256'], f.read(), file['mime'])
-            del file['path']
-            del file['mime']
+                fields[file['sha256']] = (file['sha256'], f.read(), 'application/octet-stream')
 
         # Add the task and result JSON to the response
         fields['task_json'] = ('task.json', dumps(task), 'application/json')
