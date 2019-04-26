@@ -52,6 +52,12 @@ def on_disconnect():
     log.info('Disconnected from the socketIO server')
 
 
+def callback_download_file(data, file_path):
+    with open(file_path, 'wb') as f:
+        f.write(data)
+        f.close()
+
+
 def callback_wait_for_task():
     global wait_start
 
@@ -80,7 +86,8 @@ def on_got_task(task):
     # Get file if required by service
     file_path = os.path.join(folder_path, task.fileinfo.sha256)
     if file_required:
-        svc_client.file.download_file(task.fileinfo.sha256, file_path)
+        # svc_client.file.download_file(task.fileinfo.sha256, file_path)
+        sio.emit('download_file', (task.fileinfo.sha256, file_path), namespace='/files', callback=callback_download_file)
 
     # Save task.json
     task_json_path = os.path.join(folder_path, 'task.json')
@@ -107,9 +114,13 @@ def on_got_task(task):
 
     new_files = result.response.extracted + result.response.supplementary
     if new_files:
-        save_file(task, result)
+        # save_file(task, result)
+        for file in new_files:
+            file_path = os.path.join(folder_path, file.name)
+            with open(file_path, 'rb') as f:
+                sio.emit('upload_file', (f.read(), classification, service_name, file.sha256, task.ttl), namespace='/files')
 
-    sio.emit('done_task', (service_name, exec_time, task, result), namespace='/tasking')
+    sio.emit('done_task', (service_name, exec_time, task.as_primitives(), result.as_primitives()), namespace='/tasking')
 
     sio.emit('wait_for_task', (service_name, service_version, service_tool_version), namespace='/tasking', callback=callback_wait_for_task)
 
