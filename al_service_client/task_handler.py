@@ -53,6 +53,7 @@ def on_disconnect():
 
 
 def callback_download_file(data, file_path):
+    log.info(f"Saving received file to: {file_path}")
     with open(file_path, 'wb') as f:
         f.write(data)
         f.close()
@@ -86,8 +87,8 @@ def on_got_task(task):
     # Get file if required by service
     file_path = os.path.join(folder_path, task.fileinfo.sha256)
     if file_required:
-        # svc_client.file.download_file(task.fileinfo.sha256, file_path)
-        sio.emit('download_file', (task.fileinfo.sha256, file_path), namespace='/files', callback=callback_download_file)
+        svc_client.file.download_file(task.fileinfo.sha256, file_path)
+        # sio.emit('download_file', (task.fileinfo.sha256, file_path), namespace='/files', callback=callback_download_file)
 
     # Save task.json
     task_json_path = os.path.join(folder_path, 'task.json')
@@ -114,11 +115,13 @@ def on_got_task(task):
 
     new_files = result.response.extracted + result.response.supplementary
     if new_files:
-        # save_file(task, result)
-        for file in new_files:
-            file_path = os.path.join(folder_path, file.name)
-            with open(file_path, 'rb') as f:
-                sio.emit('upload_file', (f.read(), classification, service_name, file.sha256, task.ttl), namespace='/files')
+        save_file(task.as_primitives(), result.as_primitives())
+
+        # for file in new_files:
+        #     file_path = os.path.join(folder_path, file.name)
+        #     with open(file_path, 'rb') as f:
+        #         sio.emit('upload_file', (f.read(), classification, service_name, file.sha256, task.ttl), namespace='/files')
+
 
     sio.emit('done_task', (service_name, exec_time, task.as_primitives(), result.as_primitives()), namespace='/tasking')
 
