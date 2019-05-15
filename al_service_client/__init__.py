@@ -6,7 +6,7 @@ import sys
 import tempfile
 import time
 from base64 import b64decode
-from json import dumps, loads
+from json import dumps
 from urllib.parse import quote
 
 import requests
@@ -206,8 +206,8 @@ class File(object):
             f.close()
 
     def save_file(self, task, result):
-        task_hash = hashlib.md5((str(task['sid'] + task['sha256']).encode('utf-8'))).hexdigest()
-        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), task_hash, 'completed')
+        task_hash = hashlib.md5((str(task['sid'] + task['fileinfo']['sha256']).encode('utf-8'))).hexdigest()
+        folder_path = os.path.join(tempfile.gettempdir(), task['service_name'].lower(), 'completed', task_hash,)
 
         fields = {}
 

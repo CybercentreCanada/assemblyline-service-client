@@ -16,6 +16,7 @@ import yaml
 
 from al_service_client import Client
 from assemblyline.common import log
+from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.odm.messages.task import Task
 from assemblyline.odm.models.result import Result
 
@@ -29,6 +30,7 @@ sio = socketio.Client()
 
 wm = pyinotify.WatchManager()  # Watch Manager
 
+downloaded = None
 result_found = False
 wait_start = None
 
@@ -53,10 +55,19 @@ def on_disconnect():
 
 
 def callback_download_file(data, file_path):
+    global downloaded
+
     log.info(f"Saving received file to: {file_path}")
     with open(file_path, 'wb') as f:
         f.write(data)
         f.close()
+
+    sha256 = os.path.basename(file_path)
+    received_sha256 = get_sha256_for_file(file_path)
+    if received_sha256 == sha256:
+        downloaded = 'yes'
+    else:
+        downloaded = 'no'
 
 
 def callback_wait_for_task():
@@ -87,8 +98,14 @@ def on_got_task(task):
     # Get file if required by service
     file_path = os.path.join(folder_path, task.fileinfo.sha256)
     if file_required:
-        svc_client.file.download_file(task.fileinfo.sha256, file_path)
-        # sio.emit('download_file', (task.fileinfo.sha256, file_path), namespace='/files', callback=callback_download_file)
+        # svc_client.file.download_file(task.fileinfo.sha256, file_path)
+        sio.emit('download_file', (task.fileinfo.sha256, file_path), namespace='/files', callback=callback_download_file)
+        while not downloaded:
+            time.sleep(0.1)
+        if downloaded != 'yes':
+            sio.emit('download_file', (task.fileinfo.sha256, file_path), namespace='/files', callback=callback_download_file)
+            while not downloaded:
+                time.sleep(0.1)
 
     # Save task.json
     task_json_path = os.path.join(folder_path, 'task.json')
@@ -115,12 +132,12 @@ def on_got_task(task):
 
     new_files = result.response.extracted + result.response.supplementary
     if new_files:
-        save_file(task.as_primitives(), result.as_primitives())
+        # save_file(task, result)
 
-        # for file in new_files:
-        #     file_path = os.path.join(folder_path, file.name)
-        #     with open(file_path, 'rb') as f:
-        #         sio.emit('upload_file', (f.read(), classification, service_name, file.sha256, task.ttl), namespace='/files')
+        for file in new_files:
+            file_path = os.path.join(folder_path, file.name)
+            with open(file_path, 'rb') as f:
+                sio.emit('upload_file', (f.read(), result.classification.value, service_name, file.sha256, task.ttl), namespace='/files')
 
 
     sio.emit('done_task', (service_name, exec_time, task.as_primitives(), result.as_primitives()), namespace='/tasking')
@@ -170,7 +187,7 @@ def get_systems_constants(json_constants=None):
 def save_file(task, result):
     folder_path = os.path.join(tempfile.gettempdir(), task.service_name.lower())
     try:
-        msg = svc_client.file.save_file(task=task, result=result)
+        msg = svc_client.file.save_file(task=task.as_primitives(), result=result.as_primitives())
         log.info('RESULT OF SAVING FILES:: '+msg)
     finally:
         if os.path.isdir(folder_path):
