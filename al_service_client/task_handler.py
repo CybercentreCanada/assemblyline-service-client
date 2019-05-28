@@ -21,7 +21,7 @@ from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.odm.messages.task import Task
 from assemblyline.odm.models.result import Result
 
-log.init_logging('assemblyline.task_handler', log_level=logging.INFO)
+log.init_logging('assemblyline.task_handler')
 log = logging.getLogger('assemblyline.task_handler')
 
 svc_api_host = os.environ['SERVICE_API_HOST']

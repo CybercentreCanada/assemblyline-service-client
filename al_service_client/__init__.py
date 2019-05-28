@@ -18,7 +18,7 @@ __all__ = ['Client', 'ClientError']
 MAX_RETRY_BACKOFF = 10
 SUPPORTED_API = 'v1'
 
-log.init_logging('assemblyline.service_client', log_level=logging.INFO)
+log.init_logging('assemblyline.service_client')
 
 
 def as_python_object(dct):
