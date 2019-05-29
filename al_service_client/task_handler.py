@@ -15,10 +15,11 @@ import pyinotify
 import socketio
 import yaml
 
-from al_service_client import Client
 from assemblyline.common import log
 from assemblyline.common.digests import get_sha256_for_file
+from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task
+from assemblyline.odm.models.error import Error
 from assemblyline.odm.models.result import Result
 
 log.init_logging('assemblyline.task_handler')
@@ -26,18 +27,23 @@ log = logging.getLogger('assemblyline.task_handler')
 
 svc_api_host = os.environ['SERVICE_API_HOST']
 
-svc_client = Client(svc_api_host)
-#sio_helper = socketio.Client()
-#sio_tasking = socketio.Client()
 sio = socketio.Client()
 
 wm = pyinotify.WatchManager()  # Watch Manager
 
 download_status = 'not_started'
-result_found = False
 wait_start = None
 
 chunk_size = 64*1024
+
+STATUSES = StringTable('STATUSES', [
+    ('WAITING', 0),
+    ('PROCESSING', 1),
+    ('RESULT_FOUND', 2),
+    ('ERROR_FOUND', 3),
+])
+
+status = None
 
 
 def disconnect():
@@ -45,15 +51,19 @@ def disconnect():
     sio.emit('disconnect', namespace='/tasking')
     sio.disconnect()
 
+
 signal.signal(signal.SIGINT, disconnect)
 signal.signal(signal.SIGTERM, disconnect)
 
+
 class EventHandler(pyinotify.ProcessEvent):
     def process_IN_CREATE(self, event):
-        global result_found
+        global status
 
-        if 'result.json' in event.pathname:
-            result_found = True
+        if event.pathname.endswith('result.json'):
+            status = STATUSES.RESULT_FOUND
+        elif event.pathname.endswith('error.json'):
+            status = STATUSES.ERROR_FOUND
 
 
 def callback_service_client_connect():
@@ -110,16 +120,18 @@ def callback_get_system_constants(system_constants, json_file):
 
 @sio.on('wait_for_task', namespace='/tasking')
 def on_wait_for_task(client_id):
-    global wait_start
+    global wait_start, status
 
     log.info(f"Server aware we are waiting for task for service: {service_name}[{service_version}]  {client_id}")
+
+    status = STATUSES.WAITING
 
     wait_start = time.time()
 
 
 @sio.on('got_task', namespace='/tasking')
 def on_got_task(task):
-    global download_status, result_found, wait_start
+    global download_status, status, wait_start
 
     task = Task(task)
 
@@ -131,15 +143,13 @@ def on_got_task(task):
     try:
         task_hash = hashlib.md5(str(task.sid + task.fileinfo.sha256).encode('utf-8')).hexdigest()
 
-        folder_path = os.path.join(tempfile.gettempdir(), task.service_name.lower(), 'received', task_hash)
+        folder_path = os.path.join(tempfile.gettempdir(), task.service_name.lower(), 'received')
         if not os.path.isdir(folder_path):
             os.makedirs(folder_path)
 
         # Get file if required by service
         file_path = os.path.join(folder_path, task.fileinfo.sha256)
         if file_required:
-            # svc_client.file.download_file(task.fileinfo.sha256, file_path)
-
             with open(file_path, 'wb') as f:
                 pass
 
@@ -152,54 +162,61 @@ def on_got_task(task):
                 except:
                     pass
 
-            # sio.emit('download_file', (task.fileinfo.sha256, file_path), namespace='/helper', callback=callback_download_file)
-            # while not downloaded:
-            #     time.sleep(0.1)
-            # download_status = 'not_started'
-            # sio.emit('start_download', (task.fileinfo.sha256, file_path), namespace='/helper')
-            #if download_status != 'success':
-            #    sio.emit('download_file', (task.fileinfo.sha256, file_path), namespace='/helper', callback=callback_download_file)
-
-
         # Save task.json
-        task_json_path = os.path.join(folder_path, 'task.json')
+        task_json_path = os.path.join(folder_path, f'{task.fileinfo.sha256}_task.json')
         with open(task_json_path, 'w') as f:
             json.dump(task.as_primitives(), f)
+        log.info(f"Saving task to: {task_json_path}")
 
         folder_path = os.path.join(tempfile.gettempdir(), task.service_name.lower(), 'completed', task_hash)
         if not os.path.isdir(folder_path):
             os.makedirs(folder_path)
 
-        # Check if 'received' directory already contains a task
-        if os.listdir(folder_path):
-            result_found = True
+        # Check if 'completed' directory already contains a result.json or error.json
+        existing_files = os.listdir(folder_path)
+        if 'result.json' in existing_files:
+            status = STATUSES.RESULT_FOUND
+        elif 'error.json' in existing_files:
+            status = STATUSES.ERROR_FOUND
         else:
-            wdd = wm.add_watch(folder_path, pyinotify.IN_CREATE, rec=False)
+            wdd = wm.add_watch(folder_path, pyinotify.IN_CREATE, rec=True)
+            status = STATUSES.PROCESSING
 
-        while not result_found:
+        while not ((status == STATUSES.RESULT_FOUND) or (status == STATUSES.ERROR_FOUND)):
             time.sleep(1)
-            log.info('waiting for result.json')
 
         log.info(f"{task.service_name} task completed, SID: {task.sid}")
-        wm.rm_watch(list(wdd.values()))
+
+        if status == STATUSES.PROCESSING:
+            try:
+                wm.rm_watch(list(wdd.values()))
+            except:
+                pass
+
         exec_time = int((time.time() - start_time) * 1000)
 
-        result_found = False
-        result_json_path = os.path.join(folder_path, 'result.json')
-        with open(result_json_path, 'r') as f:
-            result = Result(json.load(f))
+        if status == STATUSES.RESULT_FOUND:
+            result_json_path = os.path.join(folder_path, 'result.json')
+            with open(result_json_path, 'r') as f:
+                result = Result(json.load(f))
 
-        new_files = result.response.extracted + result.response.supplementary
-        if new_files:
-            # save_file(task, result)
+            new_files = result.response.extracted + result.response.supplementary
+            if new_files:
+                for file in new_files:
+                    file_path = os.path.join(folder_path, file.name)
+                    with open(file_path, 'rb') as f:
+                        sio.emit('upload_file', (f.read(), result.classification.value, service_name, file.sha256, task.ttl), namespace='/helper')
 
-            for file in new_files:
-                file_path = os.path.join(folder_path, file.name)
-                with open(file_path, 'rb') as f:
-                    sio.emit('upload_file', (f.read(), result.classification.value, service_name, file.sha256, task.ttl), namespace='/helper')
+            sio.emit('done_task', (service_name, exec_time, task.as_primitives(), result.as_primitives()), namespace='/tasking')
 
+        elif status == STATUSES.ERROR_FOUND:
+            error_json_path = os.path.join(folder_path, 'error.json')
+            with open(error_json_path, 'r') as f:
+                error = Error(json.load(f))
 
-        sio.emit('done_task', (service_name, exec_time, task.as_primitives(), result.as_primitives()), namespace='/tasking')
+            sio.emit('done_task', (service_name, exec_time, task.as_primitives(), error.as_primitives()), namespace='/tasking')
+            folder_path = os.path.join(tempfile.gettempdir(), task.service_name.lower())
+            cleanup_working_directory(folder_path)
 
         sio.emit('wait_for_task', (service_name, service_version, service_tool_version), namespace='/tasking')
     except Exception as e:
@@ -238,19 +255,11 @@ def get_systems_constants(json_constants=None):
         json_constants = '/etc/assemblyline/constants.json'
 
         # Get system constants and save it
-        #constants = svc_client.help.get_systems_constants()
         sio.emit('get_system_constants', json_constants, namespace='/helper', callback=callback_get_system_constants)
 
 
-
-def save_file(task, result):
-    folder_path = os.path.join(tempfile.gettempdir(), task.service_name.lower())
-    try:
-        msg = svc_client.file.save_file(task=task.as_primitives(), result=result.as_primitives())
-        log.info('RESULT OF SAVING FILES:: '+msg)
-    finally:
-        if os.path.isdir(folder_path):
-            shutil.rmtree(folder_path)
+def cleanup_working_directory(folder_path):
+    shutil.rmtree(folder_path)
 
 
 def task_handler():
@@ -268,7 +277,6 @@ if __name__ == '__main__':
     sio.connect(svc_api_host, namespaces=['/helper', '/tasking'])
     get_classification()
     get_systems_constants()
-    # sio.disconnect()
 
     service_config = get_service_config()
     while True:
