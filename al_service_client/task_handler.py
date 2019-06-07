@@ -25,21 +25,23 @@ log.init_logging('assemblyline.task_handler')
 log = logging.getLogger('assemblyline.task_handler')
 
 svc_api_host = os.environ['SERVICE_API_HOST']
+svc_api_auth_key = os.environ['SERVICE_API_AUTH_KEY']
 
 sio = socketio.Client()
 
 wm = pyinotify.WatchManager()  # Watch Manager
 
-download_status = 'not_started'
 wait_start = None
 
 chunk_size = 64*1024
 
 STATUSES = StringTable('STATUSES', [
     ('WAITING', 0),
-    ('PROCESSING', 1),
-    ('RESULT_FOUND', 2),
-    ('ERROR_FOUND', 3),
+    ('DOWNLOADING_FILE', 1),
+    ('DOWNLOADING_FILE_COMPLETED', 2),
+    ('PROCESSING', 3),
+    ('RESULT_FOUND', 4),
+    ('ERROR_FOUND', 5),
 ])
 
 status = None
@@ -63,23 +65,6 @@ class EventHandler(pyinotify.ProcessEvent):
             status = STATUSES.RESULT_FOUND
         elif event.pathname.endswith('error.json'):
             status = STATUSES.ERROR_FOUND
-
-
-def callback_download_file(data, file_path):
-    global download_status
-
-    download_status = 'started'
-    log.info(f"Saving received file to: {file_path}")
-    with open(file_path, 'wb') as f:
-        f.write(data)
-        f.close()
-
-    sha256 = os.path.basename(file_path)
-    received_sha256 = get_sha256_for_file(file_path)
-    if received_sha256 == sha256:
-        download_status = 'success'
-    else:
-        download_status = 'fail'
 
 
 def callback_get_classification_definition(classification_definition, yml_file):
@@ -109,7 +94,7 @@ def callback_wait_for_task():
 @sio.on('connect', namespace='/tasking')
 def on_connect():
     log.info("Connected to tasking SocketIO server")
-    sio.emit('wait_for_task', (service_name, service_version, service_tool_version), namespace='/tasking', callback=callback_wait_for_task)
+    sio.emit('wait_for_task', namespace='/tasking', callback=callback_wait_for_task)
 
 
 @sio.on('disconnect', namespace='/tasking')
@@ -119,7 +104,7 @@ def on_disconnect():
 
 @sio.on('got_task', namespace='/tasking')
 def on_got_task(task):
-    global download_status, status, wait_start
+    global status, wait_start
 
     task = Task(task)
 
@@ -136,17 +121,31 @@ def on_got_task(task):
         # Get file if required by service
         file_path = os.path.join(received_folder_path, task.fileinfo.sha256)
         if file_required:
+            # Create empty file to prepare for downloading the file in chunks
             with open(file_path, 'wb') as f:
                 pass
 
             sio.emit('start_download', (task.fileinfo.sha256, file_path), namespace='/helper')
-            received_sha256 = None
-            while task.fileinfo.sha256 != received_sha256:
-                time.sleep(1)
-                try:
-                    received_sha256 = get_sha256_for_file(file_path)
-                except:
-                    pass
+            status = STATUSES.DOWNLOADING_FILE
+
+            retry = 0
+            max_retries = 3
+            while retry < max_retries:
+                wait = 0
+                max_wait = 60
+                while not (status == STATUSES.DOWNLOADING_FILE_COMPLETED):
+                    # Wait until the file is completely downloaded or until 60 seconds max
+                    if wait > max_wait:
+                        break
+                    time.sleep(1)
+                    wait += 1
+
+                received_sha256 = get_sha256_for_file(file_path)
+                if task.fileinfo.sha256 != received_sha256:
+                    retry += 1
+                    log.info(f"An error occurred while downloading file. SHA256 mismatch between requested and downloaded file. {task.fileinfo.sha256} != {received_sha256}")
+                else:
+                    break
 
         # Save task.json
         task_json_path = os.path.join(received_folder_path, f'{task.fileinfo.sha256}_task.json')
@@ -154,7 +153,7 @@ def on_got_task(task):
             json.dump(task.as_primitives(), f)
         log.info(f"Saving task to: {task_json_path}")
 
-        sio.emit('got_task', (service_name, idle_time), namespace='/tasking')
+        sio.emit('got_task', idle_time, namespace='/tasking')
 
         if not os.path.isdir(completed_folder_path):
             os.makedirs(completed_folder_path)
@@ -192,22 +191,22 @@ def on_got_task(task):
                 for file in new_files:
                     file_path = os.path.join(completed_folder_path, file.name)
                     with open(file_path, 'rb') as f:
-                        sio.emit('upload_file', (f.read(), result.classification.value, service_name, file.sha256, task.ttl), namespace='/helper')
+                        sio.emit('upload_file', (f.read(), result.classification.value, file.sha256, task.ttl), namespace='/helper')
 
-            sio.emit('done_task', (service_name, exec_time, task.as_primitives(), result.as_primitives()), namespace='/tasking')
+            sio.emit('done_task', (exec_time, task.as_primitives(), result.as_primitives()), namespace='/tasking')
 
         elif status == STATUSES.ERROR_FOUND:
             error_json_path = os.path.join(completed_folder_path, 'error.json')
             with open(error_json_path, 'r') as f:
                 error = Error(json.load(f))
 
-            sio.emit('done_task', (service_name, exec_time, task.as_primitives(), error.as_primitives()), namespace='/tasking')
+            sio.emit('done_task', (exec_time, task.as_primitives(), error.as_primitives()), namespace='/tasking')
     finally:
         # Cleanup contents of 'received' and 'completed' directory
         cleanup_working_directory(received_folder_path)
         cleanup_working_directory(completed_folder_path)
 
-        sio.emit('wait_for_task', (service_name, service_version, service_tool_version), namespace='/tasking', callback=callback_wait_for_task)
+        sio.emit('wait_for_task', namespace='/tasking', callback=callback_wait_for_task)
 
 
 def get_classification(yml_classification=None):
@@ -258,14 +257,18 @@ def cleanup_working_directory(folder_path):
 
 
 @sio.on('write_file_chunk', namespace='/helper')
-def write_chunk(file_path, offset, data):
+def write_file_chunk(file_path, offset, data, last_chunk):
+    global status
+
     try:
         with open(file_path, 'r+b') as f:
             f.seek(offset)
             f.write(data)
     except IOError:
         log.error(f"An error occurred while downloading file to: {file_path}")
-    return True
+    finally:
+        if last_chunk:
+            status = STATUSES.DOWNLOADING_FILE_COMPLETED
 
 
 def task_handler():
@@ -294,7 +297,14 @@ if __name__ == '__main__':
         except TypeError:
             continue
 
-    sio.connect(svc_api_host, namespaces=['/helper', '/tasking'])
+    headers = {
+        'Service-API-Auth-Key': svc_api_auth_key,
+        'Service-Name': service_name,
+        'Service-Version': service_version,
+        'Service-Tool-Version': service_tool_version,
+    }
+
+    sio.connect(svc_api_host, headers=headers, namespaces=['/helper', '/tasking'])
     get_classification()
     get_systems_constants()
 
