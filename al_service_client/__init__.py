@@ -251,8 +251,8 @@ class Help(object):
                     temp_list.append((str(y[0]), int(y[1])))
                 temp[x] = temp_list
 
-        temp['RECOGNIZED_TAGS'] = ret['RECOGNIZED_TAGS']
-        constants = {'RECOGNIZED_TAGS': ret['RECOGNIZED_TAGS'],
+        temp['RECOGNIZED_TYPES'] = ret['RECOGNIZED_TYPES']
+        constants = {'RECOGNIZED_TYPES': ret['RECOGNIZED_TYPES'],
                      'RULE_PATH': ret['RULE_PATH'],
                      'STANDARD_TAG_TYPES': temp['STANDARD_TAG_TYPES'],
                      'FILE_SUMMARY': temp['FILE_SUMMARY'],
