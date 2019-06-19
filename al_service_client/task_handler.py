@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import json
-import logging
 import os
 import shutil
 import subprocess
@@ -11,19 +10,17 @@ from queue import Empty
 
 import socketio
 import yaml
+from al_core.server_base import ServerBase
 from watchdog.events import PatternMatchingEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.api import EventQueue
 
-from al_core.server_base import ServerBase
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task
 from assemblyline.odm.models.error import Error
 from assemblyline.odm.models.result import Result
-
-svc_api_host = os.environ['SERVICE_API_HOST']
-svc_api_auth_key = os.environ['SERVICE_API_AUTH_KEY']
+from assemblyline.odm.models.service import Service
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
@@ -45,28 +42,13 @@ class FileEventHandler(PatternMatchingEventHandler):
         self.queue = queue
 
     def process(self, event):
-        '''
-        event.event_type
-            'modified' | 'created' | 'moved' | 'deleted'
-        event.is_directory
-            True | False
-        event.src_path
-            path/to/observed/file
-        '''
-
         if event.src_path.endswith('result.json'):
             self.queue.put((event.src_path, STATUSES.RESULT_FOUND))
         elif event.pathname.endswith('error.json'):
             self.queue.put((event.src_path, STATUSES.ERROR_FOUND))
 
-    # def on_moved(self, event):
-    #     self.process(event)
-
     def on_created(self, event):
         self.process(event)
-
-    # def on_any_event(self, event):
-    #     self.process(event)
 
 
 class FileWatcher:
@@ -112,12 +94,12 @@ class TaskHandler(ServerBase):
         self.queue = EventQueue()
         self.file_watcher = None
 
-        self.service_name = None
-        self.service_version = None
+        self.service = None
         self.service_tool_version = None
-        self.service_category = None
-        self.service_stage = None
         self.file_required = None
+        self.service_api_host = os.environ['SERVICE_API_HOST']
+        self.service_api_auth_key = os.environ['SERVICE_API_AUTH_KEY']
+
         self.received_folder_path = None
         self.completed_folder_path = None
 
@@ -149,7 +131,7 @@ class TaskHandler(ServerBase):
         self.sio.disconnect()
 
     def callback_wait_for_task(self):
-        self.log.info(f"Server aware we are waiting for task for service: {self.service_name}_{self.service_version}")
+        self.log.info(f"Server aware we are waiting for task for service: {self.service.name}_{self.service.version}")
 
         self.status = STATUSES.WAITING_FOR_TASK
 
@@ -170,11 +152,15 @@ class TaskHandler(ServerBase):
                 with open(self.config_yml_file, 'r') as yml_fh:
                     service_config = yaml.safe_load(yml_fh)
 
-                    self.service_name = service_config['SERVICE_NAME']
-                    self.service_version = service_config['SERVICE_VERSION']
+                    self.service = Service()
+                    self.service.name = service_config['SERVICE_NAME']
+                    self.service.enabled = True
+                    self.service.category = service_config['SERVICE_CATEGORY']
+                    self.service.stage = service_config['SERVICE_STAGE']
+                    self.service.version = service_config['SERVICE_VERSION']
+                    self.service.docker_config.name = f"cccs/alsvc_{self.service.name.lower()}:latest"
+
                     self.service_tool_version = service_config['SERVICE_TOOL_VERSION']
-                    self.service_category = service_config['SERVICE_CATEGORY']
-                    self.service_stage = service_config['SERVICE_STAGE']
                     self.file_required = service_config['SERVICE_FILE_REQUIRED']
                     break
             else:
@@ -206,7 +192,7 @@ class TaskHandler(ServerBase):
             file_path = os.path.join(self.received_folder_path, task.fileinfo.sha256)
             if self.file_required:
                 # Create empty file to prepare for downloading the file in chunks
-                with open(file_path, 'wb') as f:
+                with open(file_path, 'wb'):
                     pass
 
                 self.sio.emit('start_download', (task.fileinfo.sha256, file_path), namespace='/helper')
@@ -228,7 +214,9 @@ class TaskHandler(ServerBase):
                     if task.fileinfo.sha256 != received_sha256:
                         retry += 1
                         self.log.info(
-                            f"An error occurred while downloading file. SHA256 mismatch between requested and downloaded file. {task.fileinfo.sha256} != {received_sha256}")
+                            f"An error occurred while downloading file. "
+                            f"SHA256 mismatch between requested and downloaded file. "
+                            f"{task.fileinfo.sha256} != {received_sha256}")
                     else:
                         break
 
@@ -309,30 +297,19 @@ class TaskHandler(ServerBase):
         self.get_service_config()
 
         headers = {
-            'Service-API-Auth-Key': svc_api_auth_key,
-            'Service-Name': self.service_name,
-            'Service-Version': self.service_version,
+            'Service-API-Auth-Key': self.service_api_auth_key,
+            'Service-Name': self.service.name,
+            'Service-Version': self.service.version,
             'Service-Tool-Version': self.service_tool_version,
         }
 
-        self.sio.connect(svc_api_host, headers=headers, namespaces=['/helper'])
+        self.sio.connect(self.service_api_host, headers=headers, namespaces=['/helper'])
 
         self.get_classification()
         self.get_systems_constants()
 
         # Register service
-        service_data = {
-            'name': self.service_name,
-            'enabled': True,
-            'category': self.service_category,
-            'stage': self.service_stage,
-            'version': self.service_version,
-            'docker_config': {
-                'image': f"cccs/alsvc_{self.service_name.lower()}:latest",
-            }
-        }
-
-        self.sio.emit('register_service', service_data, namespace='/helper', callback=self.callback_register_service)
+        self.sio.emit('register_service', self.service.as_primitives(), namespace='/helper', callback=self.callback_register_service)
 
         while True:
             if self.status == STATUSES.WAITING_FOR_TASK:
@@ -343,13 +320,13 @@ class TaskHandler(ServerBase):
             else:
                 time.sleep(1)
 
-        self.sio.connect(svc_api_host, headers=headers, namespaces=['/helper', '/tasking'])
+        self.sio.connect(self.service_api_host, headers=headers, namespaces=['/helper', '/tasking'])
 
-        self.received_folder_path = os.path.join(tempfile.gettempdir(), self.service_name.lower(), 'received')
+        self.received_folder_path = os.path.join(tempfile.gettempdir(), self.service.name.lower(), 'received')
         if not os.path.isdir(self.received_folder_path):
             os.makedirs(self.received_folder_path)
 
-        self.completed_folder_path = os.path.join(tempfile.gettempdir(), self.service_name.lower(), 'completed')
+        self.completed_folder_path = os.path.join(tempfile.gettempdir(), self.service.name.lower(), 'completed')
         if not os.path.isdir(self.completed_folder_path):
             os.makedirs(self.completed_folder_path)
 
