@@ -30,8 +30,9 @@ setup(
     packages=find_packages(exclude=['test/*']),
     install_requires=[
         'assemblyline',
+        'assemblyline-core',
         'python-socketio',
-        'pyinotify',
+        'watchdog',
     ],
     package_data={
     }
