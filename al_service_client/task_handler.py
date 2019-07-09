@@ -80,13 +80,12 @@ class TaskHandler(ServerBase):
     """
 
     def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT):
-        super().__init__('assemblyline.svc.task_handler')
+        super().__init__('assemblyline.svc.task_handler', shutdown_timeout=shutdown_timeout)
 
-        self.classification_yml_file = '/etc/assemblyline/classification.yml'
-        self.config_yml_file = '/etc/assemblyline/service_config.yml'
-        self.constants_json_file = '/etc/assemblyline/constants.json'
+        self.classification_yml = '/etc/assemblyline/classification.yml'
+        self.service_manifest_yml = '/etc/assemblyline/service_manifest.yml'
+        self.constants_json = '/etc/assemblyline/constants.json'
 
-        self.shutdown_timeout = shutdown_timeout
         self.sio = socketio.Client()
         self.status = None
 
@@ -111,15 +110,15 @@ class TaskHandler(ServerBase):
         self.sio.on('quit', handler=self.on_quit, namespace='/helper')
 
     def callback_get_classification_definition(self, classification_definition):
-        self.log.info(f"Received classification definition. Saving it to: {self.classification_yml_file}")
+        self.log.info(f"Received classification definition. Saving it to: {self.classification_yml}")
 
-        with open(self.classification_yml_file, 'w') as fh:
+        with open(self.classification_yml, 'w') as fh:
             yaml.safe_dump(classification_definition, fh)
 
     def callback_get_system_constants(self, system_constants):
-        self.log.info(f"Received system constants. Saving them to: {self.constants_json_file}")
+        self.log.info(f"Received system constants. Saving them to: {self.constants_json}")
 
-        with open(self.constants_json_file, 'w') as fh:
+        with open(self.constants_json, 'w') as fh:
             json.dump(system_constants, fh)
 
     def callback_register_service(self, keep_alive):
@@ -148,20 +147,17 @@ class TaskHandler(ServerBase):
         # Load from the config yaml
         while True:
             self.log.info("Trying to load service config YAML...")
-            if os.path.exists(self.config_yml_file):
-                with open(self.config_yml_file, 'r') as yml_fh:
+            if os.path.exists(self.service_manifest_yml):
+                with open(self.service_manifest_yml, 'r') as yml_fh:
                     service_config = yaml.safe_load(yml_fh)
+                    self.service_tool_version = service_config['tool_version']
+                    self.file_required = service_config['file_required']
 
-                    self.service = Service()
-                    self.service.name = service_config['SERVICE_NAME']
-                    self.service.enabled = True
-                    self.service.category = service_config['SERVICE_CATEGORY']
-                    self.service.stage = service_config['SERVICE_STAGE']
-                    self.service.version = service_config['SERVICE_VERSION']
-                    self.service.docker_config.name = f"cccs/alsvc_{self.service.name.lower()}:latest"
+                    del service_config['tool_version']
+                    del service_config['file_required']
 
-                    self.service_tool_version = service_config['SERVICE_TOOL_VERSION']
-                    self.file_required = service_config['SERVICE_FILE_REQUIRED']
+                    self.service = Service(service_config)
+
                     break
             else:
                 time.sleep(5)
