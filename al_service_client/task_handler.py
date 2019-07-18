@@ -10,11 +10,11 @@ from queue import Empty
 
 import socketio
 import yaml
-from al_core.server_base import ServerBase
 from watchdog.events import PatternMatchingEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.api import EventQueue
 
+from al_core.server_base import ServerBase
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task
@@ -73,14 +73,8 @@ class FileWatcher:
 
 
 class TaskHandler(ServerBase):
-    """
-    Inheriting from thread so that the main work is done off the main thread.
-    This lets the main thread handle interrupts properly, even when the workload
-    makes a blocking call that would normally stop this.
-    """
-
     def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT):
-        super().__init__('assemblyline.svc.task_handler', shutdown_timeout=shutdown_timeout)
+        super().__init__('assemblyline.service.task_handler', shutdown_timeout=shutdown_timeout)
 
         self.classification_yml = '/etc/assemblyline/classification.yml'
         self.service_manifest_yml = '/etc/assemblyline/service_manifest.yml'
@@ -98,6 +92,8 @@ class TaskHandler(ServerBase):
         self.file_required = None
         self.service_api_host = os.environ['SERVICE_API_HOST']
         self.service_api_auth_key = os.environ['SERVICE_API_AUTH_KEY']
+
+        self.container_id = os.environ['HOSTNAME']
 
         self.received_folder_path = None
         self.completed_folder_path = None
@@ -153,8 +149,8 @@ class TaskHandler(ServerBase):
                     self.service_tool_version = service_config['tool_version']
                     self.file_required = service_config['file_required']
 
-                    del service_config['tool_version']
-                    del service_config['file_required']
+                    service_config.pop('tool_version', None)
+                    service_config.pop('file_required', None)
 
                     self.service = Service(service_config)
 
@@ -293,6 +289,7 @@ class TaskHandler(ServerBase):
         self.get_service_config()
 
         headers = {
+            'Container-Id': self.container_id,
             'Service-API-Auth-Key': self.service_api_auth_key,
             'Service-Name': self.service.name,
             'Service-Version': self.service.version,
