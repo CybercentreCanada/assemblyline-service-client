@@ -54,7 +54,6 @@ class FileEventHandler(PatternMatchingEventHandler):
 class FileWatcher:
     def __init__(self, queue, watch_path):
         self.watch_path = watch_path
-        self.event_handler = None
         self.observer = None
         self.queue = queue
 
