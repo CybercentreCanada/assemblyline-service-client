@@ -293,6 +293,7 @@ class TaskHandler(ServerBase):
             'Service-Name': self.service.name,
             'Service-Version': self.service.version,
             'Service-Tool-Version': self.service_tool_version,
+            'Service-Timeout': self.service.timeout,
         }
 
         self.sio.connect(self.service_api_host, headers=headers, namespaces=['/helper'])
