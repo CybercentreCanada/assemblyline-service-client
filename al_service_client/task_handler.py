@@ -145,13 +145,32 @@ class TaskHandler(ServerBase):
             if os.path.exists(self.service_manifest_yml):
                 with open(self.service_manifest_yml, 'r') as yml_fh:
                     service_config = yaml.safe_load(yml_fh)
-                    self.service_tool_version = service_config['tool_version']
-                    self.file_required = service_config['file_required']
+                    self.service_tool_version = service_config.get('tool_version')
+                    self.file_required = service_config.get('file_required', True)
 
-                    service_config.pop('tool_version', None)
-                    service_config.pop('file_required', None)
-
-                    self.service = Service(service_config)
+                    self.service = Service(dict(
+                        accepts=service_config.get('accepts', None),
+                        rejects=service_config.get('rejects', None),
+                        category=service_config.get('category', None),
+                        config=service_config.get('config', None),
+                        cpu_cores=service_config.get('cpu_cores', None),
+                        description=service_config.get('description', None),
+                        enabled=service_config.get('enabled', None),
+                        install_by_default=service_config.get('install_by_default', None),
+                        is_external=service_config.get('is_external', None),
+                        licence_count=service_config.get('licence', None),
+                        name=service_config.get('name'),
+                        version=service_config.get('version'),
+                        ram_mb=service_config.get('ram_mb', None),
+                        disable_cache=service_config.get('diasble_cache', None),
+                        stage=service_config.get('stage', None),
+                        submission_params=service_config.get('submission_params', None),
+                        supported_platforms=service_config.get('supported_platforms', None),
+                        timeout=service_config.get('timeout', None),
+                        heuristics=service_config.get('heuristics', None),
+                        docker_config=service_config.get('docker_config', None),
+                        update_config=service_config.get('update_config', None),
+                    ))
 
                     break
             else:
