@@ -19,6 +19,7 @@ from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task
 from assemblyline.odm.models.error import Error
+from assemblyline.odm.models.heuristic import Heuristic
 from assemblyline.odm.models.result import Result
 from assemblyline.odm.models.service import Service
 
@@ -87,6 +88,7 @@ class TaskHandler(ServerBase):
         self.file_watcher = None
 
         self.service = None
+        self.service_heuristics = []
         self.service_tool_version = None
         self.file_required = None
         self.service_api_host = os.environ['SERVICE_API_HOST']
@@ -124,6 +126,10 @@ class TaskHandler(ServerBase):
 
         self.sio.disconnect()
 
+    def callback_save_heuristic(self, new):
+        if new:
+            self.log.info("Heuristic saved successfully.")
+
     def callback_wait_for_task(self):
         self.log.info(f"Server aware we are waiting for task for service: {self.service.name}_{self.service.version}")
 
@@ -138,39 +144,50 @@ class TaskHandler(ServerBase):
         self.sio.emit('get_classification_definition', namespace='/helper',
                       callback=self.callback_get_classification_definition)
 
-    def get_service_config(self):
+    def load_service_manifest(self):
         # Load from the config yaml
         while True:
             self.log.info("Trying to load service config YAML...")
             if os.path.exists(self.service_manifest_yml):
                 with open(self.service_manifest_yml, 'r') as yml_fh:
-                    service_config = yaml.safe_load(yml_fh)
-                    self.service_tool_version = service_config.get('tool_version')
-                    self.file_required = service_config.get('file_required', True)
+                    service_manifest_data = yaml.safe_load(yml_fh)
+                    self.service_tool_version = service_manifest_data.get('tool_version')
+                    self.file_required = service_manifest_data.get('file_required', True)
 
                     self.service = Service(dict(
-                        accepts=service_config.get('accepts', None),
-                        rejects=service_config.get('rejects', None),
-                        category=service_config.get('category', None),
-                        config=service_config.get('config', None),
-                        cpu_cores=service_config.get('cpu_cores', None),
-                        description=service_config.get('description', None),
-                        enabled=service_config.get('enabled', None),
-                        install_by_default=service_config.get('install_by_default', None),
-                        is_external=service_config.get('is_external', None),
-                        licence_count=service_config.get('licence', None),
-                        name=service_config.get('name'),
-                        version=service_config.get('version'),
-                        ram_mb=service_config.get('ram_mb', None),
-                        disable_cache=service_config.get('diasble_cache', None),
-                        stage=service_config.get('stage', None),
-                        submission_params=service_config.get('submission_params', None),
-                        supported_platforms=service_config.get('supported_platforms', None),
-                        timeout=service_config.get('timeout', None),
-                        heuristics=service_config.get('heuristics', None),
-                        docker_config=service_config.get('docker_config', None),
-                        update_config=service_config.get('update_config', None),
+                        accepts=service_manifest_data.get('accepts', None),
+                        rejects=service_manifest_data.get('rejects', None),
+                        category=service_manifest_data.get('category', None),
+                        config=service_manifest_data.get('config', None),
+                        cpu_cores=service_manifest_data.get('cpu_cores', None),
+                        description=service_manifest_data.get('description', None),
+                        enabled=service_manifest_data.get('enabled', None),
+                        install_by_default=service_manifest_data.get('install_by_default', None),
+                        is_external=service_manifest_data.get('is_external', None),
+                        licence_count=service_manifest_data.get('licence', None),
+                        name=service_manifest_data.get('name'),
+                        version=service_manifest_data.get('version'),
+                        ram_mb=service_manifest_data.get('ram_mb', None),
+                        disable_cache=service_manifest_data.get('diasble_cache', None),
+                        stage=service_manifest_data.get('stage', None),
+                        submission_params=service_manifest_data.get('submission_params', None),
+                        supported_platforms=service_manifest_data.get('supported_platforms', None),
+                        timeout=service_manifest_data.get('timeout', None),
+                        docker_config=service_manifest_data.get('docker_config', None),
+                        update_config=service_manifest_data.get('update_config', None),
                     ))
+
+                    for heuristic in service_manifest_data.get('heuristics', []):
+                        self.service_heuristics.append(Heuristic(dict(
+                            attack_id=heuristic.get('attack_id', None),
+                            classification=heuristic.get('classification', None),
+                            description=heuristic.get('description'),
+                            filetype=heuristic.get('filetype'),
+                            heur_id=heuristic.get('heur_id'),
+                            name=heuristic.get('name'),
+                            namespace=heuristic.get('namespace', None),
+                            score=heuristic.get('score'),
+                        )))
 
                     break
             else:
@@ -304,24 +321,31 @@ class TaskHandler(ServerBase):
 
     def try_run(self):
         self.status = STATUSES.INITIALIZING
-        self.get_service_config()
+        self.load_service_manifest()
 
         headers = {
             'Container-Id': self.container_id,
             'Service-API-Auth-Key': self.service_api_auth_key,
             'Service-Name': self.service.name,
             'Service-Version': self.service.version,
-            'Service-Tool-Version': self.service_tool_version,
-            'Service-Timeout': self.service.timeout,
+            'Service-Timeout': str(self.service.timeout),
         }
+
+        if self.service_tool_version:
+            headers['Service-Tool-Version'] = self.service_tool_version
 
         self.sio.connect(self.service_api_host, headers=headers, namespaces=['/helper'])
 
         self.get_classification()
-        self.get_systems_constants()
+        # self.get_systems_constants()
 
         # Register service
-        self.sio.emit('register_service', self.service.as_primitives(), namespace='/helper', callback=self.callback_register_service)
+        self.sio.emit('register_service', self.service.as_primitives(), namespace='/helper',
+                      callback=self.callback_register_service)
+
+        # Save any new service Heuristic(s)
+        heuristics = [heuristic.as_primitives() for heuristic in self.service_heuristics]
+        self.sio.emit('save_heuristics', heuristics, namespace='/helper', callback=self.callback_save_heuristic)
 
         while True:
             if self.status == STATUSES.WAITING_FOR_TASK:
