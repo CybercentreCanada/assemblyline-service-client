@@ -45,7 +45,7 @@ class FileEventHandler(PatternMatchingEventHandler):
     def process(self, event):
         if event.src_path.endswith('result.json'):
             self.queue.put((event.src_path, STATUSES.RESULT_FOUND))
-        elif event.pathname.endswith('error.json'):
+        elif event.src_path.endswith('error.json'):
             self.queue.put((event.src_path, STATUSES.ERROR_FOUND))
 
     def on_created(self, event):
