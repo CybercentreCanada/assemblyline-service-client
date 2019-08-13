@@ -3,7 +3,6 @@
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 import time
 from queue import Empty
@@ -63,13 +62,10 @@ class FileWatcher:
         event_handler = FileEventHandler(self.queue, patterns=patt)
         self.observer = Observer()
         self.observer.schedule(event_handler, path=self.watch_path)
-        self.observer.daemon = True
         self.observer.start()
 
     def stop(self):
-        # TODO: wait until task has finished processing before stopping observer
-        # self.observer.stop()
-        pass
+        self.observer.stop()
 
 
 class TaskHandler(ServerBase):
@@ -122,9 +118,8 @@ class TaskHandler(ServerBase):
         if keep_alive:
             self.status = STATUSES.WAITING_FOR_TASK
         else:
+            self.log.info("New service registered. Stopping...")
             self.status = STATUSES.STOPPING
-
-        self.sio.disconnect()
 
     def callback_save_heuristic(self, new):
         if new:
@@ -145,53 +140,22 @@ class TaskHandler(ServerBase):
                       callback=self.callback_get_classification_definition)
 
     def load_service_manifest(self):
-        # Load from the config yaml
-        while True:
-            self.log.info("Trying to load service config YAML...")
-            if os.path.exists(self.service_manifest_yml):
-                with open(self.service_manifest_yml, 'r') as yml_fh:
-                    service_manifest_data = yaml.safe_load(yml_fh)
-                    self.service_tool_version = service_manifest_data.get('tool_version')
-                    self.file_required = service_manifest_data.get('file_required', True)
+        # Load from the service manifest yaml
+        self.log.info("Trying to load service manifest YAML...")
+        if os.path.exists(self.service_manifest_yml):
+            with open(self.service_manifest_yml, 'r') as yml_fh:
+                service_manifest_data = yaml.safe_load(yml_fh)
+                self.service_tool_version = service_manifest_data.get('tool_version')
+                self.file_required = service_manifest_data.get('file_required', True)
 
-                    self.service = Service(dict(
-                        accepts=service_manifest_data.get('accepts', None),
-                        rejects=service_manifest_data.get('rejects', None),
-                        category=service_manifest_data.get('category', None),
-                        config=service_manifest_data.get('config', None),
-                        cpu_cores=service_manifest_data.get('cpu_cores', None),
-                        description=service_manifest_data.get('description', None),
-                        enabled=service_manifest_data.get('enabled', None),
-                        install_by_default=service_manifest_data.get('install_by_default', None),
-                        is_external=service_manifest_data.get('is_external', None),
-                        licence_count=service_manifest_data.get('licence', None),
-                        name=service_manifest_data.get('name'),
-                        version=service_manifest_data.get('version'),
-                        ram_mb=service_manifest_data.get('ram_mb', None),
-                        disable_cache=service_manifest_data.get('diasble_cache', None),
-                        stage=service_manifest_data.get('stage', None),
-                        submission_params=service_manifest_data.get('submission_params', None),
-                        supported_platforms=service_manifest_data.get('supported_platforms', None),
-                        timeout=service_manifest_data.get('timeout', None),
-                        docker_config=service_manifest_data.get('docker_config', None),
-                        update_config=service_manifest_data.get('update_config', None),
-                    ))
+                # Pop the 'extra' data from the service manifest
+                service_manifest_data.pop('file_required', None)
+                service_manifest_data.pop('tool_version', None)
 
-                    for heuristic in service_manifest_data.get('heuristics', []):
-                        self.service_heuristics.append(Heuristic(dict(
-                            attack_id=heuristic.get('attack_id', None),
-                            classification=heuristic.get('classification', None),
-                            description=heuristic.get('description'),
-                            filetype=heuristic.get('filetype'),
-                            heur_id=heuristic.get('heur_id'),
-                            name=heuristic.get('name'),
-                            namespace=heuristic.get('namespace', None),
-                            score=heuristic.get('score'),
-                        )))
+                self.service = Service(service_manifest_data)
 
-                    break
-            else:
-                time.sleep(5)
+                for heuristic in service_manifest_data.get('heuristics', []):
+                    self.service_heuristics.append(Heuristic(heuristic))
 
     def get_systems_constants(self):
         self.log.info("Requesting system constants...")
@@ -345,16 +309,18 @@ class TaskHandler(ServerBase):
 
         # Save any new service Heuristic(s)
         heuristics = [heuristic.as_primitives() for heuristic in self.service_heuristics]
-        self.sio.emit('save_heuristics', heuristics, namespace='/helper', callback=self.callback_save_heuristic)
+        if heuristics:
+            self.sio.emit('save_heuristics', heuristics, namespace='/helper', callback=self.callback_save_heuristic)
 
-        while True:
-            if self.status == STATUSES.WAITING_FOR_TASK:
-                break
-            elif self.status == STATUSES.STOPPING:
-                self.stop()
-                return
-            else:
-                time.sleep(1)
+        # Wait until service initialization is complete
+        while self.status == STATUSES.INITIALIZING:
+            time.sleep(1)
+
+        if self.status == STATUSES.WAITING_FOR_TASK:
+            self.sio.disconnect()
+        elif self.status == STATUSES.STOPPING:
+            self.stop()
+            return
 
         self.sio.connect(self.service_api_host, headers=headers, namespaces=['/helper', '/tasking'])
 
@@ -390,8 +356,7 @@ class TaskHandler(ServerBase):
                 self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
 
     def stop(self):
-        subprocess.call(["supervisorctl", "signal", "SIGKILL", "run_service"])
-
+        # TODO: wait until task has finished processing before stopping observer
         if self.file_watcher:
             self.file_watcher.stop()
             self.log.info(f"Stopped watching folder for result/error: {self.completed_folder_path}")
