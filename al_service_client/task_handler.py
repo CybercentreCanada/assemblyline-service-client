@@ -142,20 +142,25 @@ class TaskHandler(ServerBase):
     def load_service_manifest(self):
         # Load from the service manifest yaml
         self.log.info("Trying to load service manifest YAML...")
-        if os.path.exists(self.service_manifest_yml):
-            with open(self.service_manifest_yml, 'r') as yml_fh:
-                service_manifest_data = yaml.safe_load(yml_fh)
-                self.service_tool_version = service_manifest_data.get('tool_version')
-                self.file_required = service_manifest_data.get('file_required', True)
+        while not self.service:
+            if os.path.exists(self.service_manifest_yml):
+                with open(self.service_manifest_yml, 'r') as yml_fh:
+                    service_manifest_data = yaml.safe_load(yml_fh)
+                    self.service_tool_version = service_manifest_data.get('tool_version')
+                    self.file_required = service_manifest_data.get('file_required', True)
 
-                # Pop the 'extra' data from the service manifest
-                service_manifest_data.pop('file_required', None)
-                service_manifest_data.pop('tool_version', None)
+                    # Pop the 'extra' data from the service manifest
+                    service_manifest_data.pop('file_required', None)
+                    service_manifest_data.pop('tool_version', None)
+                    service_manifest_data.pop('heuristics', None)
 
-                self.service = Service(service_manifest_data)
+                    self.service = Service(service_manifest_data)
 
-                for heuristic in service_manifest_data.get('heuristics', []):
-                    self.service_heuristics.append(Heuristic(heuristic))
+                    for heuristic in service_manifest_data.get('heuristics', []):
+                        self.service_heuristics.append(Heuristic(heuristic))
+
+            if not self.service:
+                time.sleep(5)
 
     def get_systems_constants(self):
         self.log.info("Requesting system constants...")
@@ -298,7 +303,17 @@ class TaskHandler(ServerBase):
         if self.service_tool_version:
             headers['Service-Tool-Version'] = self.service_tool_version
 
-        self.sio.connect(self.service_api_host, headers=headers, namespaces=['/helper'])
+        self.log.info(f"Connecting to SocketIO service server: {self.service_api_host}")
+        retry_count = 0
+        while True:
+            try:
+                self.sio.connect(self.service_api_host, headers=headers, namespaces=['/helper'])
+                break
+            except socketio.exceptions.ConnectionError:
+                if retry_count > 3:
+                    self.log.warning(f"Can't connect to SocketIO service server: {self.service_api_host}")
+                time.sleep(5)
+                retry_count += 1
 
         self.get_classification()
         # self.get_systems_constants()
