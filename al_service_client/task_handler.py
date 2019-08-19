@@ -13,7 +13,6 @@ from watchdog.events import PatternMatchingEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.api import EventQueue
 
-from al_core.server_base import ServerBase
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task
@@ -21,6 +20,7 @@ from assemblyline.odm.models.error import Error
 from assemblyline.odm.models.heuristic import Heuristic
 from assemblyline.odm.models.result import Result
 from assemblyline.odm.models.service import Service
+from assemblyline_core.server_base import ServerBase
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
