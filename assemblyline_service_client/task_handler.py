@@ -265,13 +265,14 @@ class TaskHandler(ServerBase):
                 break
 
         except Exception as e:
-            self.log.info(str(e))
+            self.log.exception("An exception occurred processing a task")
+            raise
         finally:
             # Cleanup contents of 'received' and 'completed' directory
             self.cleanup_working_directory(self.received_folder_path)
             self.cleanup_working_directory(self.completed_folder_path)
 
-            self.sio.emit('wait_for_task', namespace='/tasking', callback=self.callback_wait_for_task)
+        self.sio.emit('wait_for_task', namespace='/tasking', callback=self.callback_wait_for_task)
 
     def on_quit(self, *args):
         self.stop()
