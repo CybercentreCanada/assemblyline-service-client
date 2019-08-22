@@ -206,15 +206,20 @@ class TaskHandler(ServerBase):
                         time.sleep(1)
                         wait += 1
 
+                    # We might be finished downloading the file, check that we have
                     received_sha256 = get_sha256_for_file(file_path)
                     if task.fileinfo.sha256 != received_sha256:
                         retry += 1
-                        self.log.info(
+                        self.log.warning(
                             f"An error occurred while downloading file. "
                             f"SHA256 mismatch between requested and downloaded file. "
                             f"{task.fileinfo.sha256} != {received_sha256}")
                     else:
+                        # The file matches the expected hash, so we can break out of the retry loop
                         break
+
+                if retry >= max_retries:
+                    raise ValueError("Couldn't download the file from the server.")
 
             # Save task.json
             task_json_path = os.path.join(self.received_folder_path, f'{task.fileinfo.sha256}_task.json')
