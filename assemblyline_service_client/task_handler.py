@@ -76,7 +76,6 @@ class TaskHandler(ServerBase):
         self.service_manifest_yml = '/etc/assemblyline/service_manifest.yml'
         self.constants_json = '/etc/assemblyline/constants.json'
 
-        self.sio = socketio.Client(logger=self.log, engineio_logger=self.log)
         self.status = None
 
         self.wait_start = None
@@ -94,13 +93,17 @@ class TaskHandler(ServerBase):
 
         self.received_folder_path = None
         self.completed_folder_path = None
+        self.sio = self.build_sio_client()
 
+    def build_sio_client(self):
+        sio = socketio.Client(logger=self.log, engineio_logger=self.log)
         # Register sio event handlers
-        self.sio.on('connect', handler=self.on_connect, namespace='/tasking')
-        self.sio.on('disconnect', handler=self.on_disconnect, namespace='/tasking')
-        self.sio.on('got_task', handler=self.on_got_task, namespace='/tasking')
-        self.sio.on('write_file_chunk', handler=self.write_file_chunk, namespace='/helper')
-        self.sio.on('quit', handler=self.on_quit, namespace='/helper')
+        sio.on('connect', handler=self.on_connect, namespace='/tasking')
+        sio.on('disconnect', handler=self.on_disconnect, namespace='/tasking')
+        sio.on('got_task', handler=self.on_got_task, namespace='/tasking')
+        sio.on('write_file_chunk', handler=self.write_file_chunk, namespace='/helper')
+        sio.on('quit', handler=self.on_quit, namespace='/helper')
+        return sio
 
     def callback_get_classification_definition(self, classification_definition):
         self.log.info(f"Received classification definition. Saving it to: {self.classification_yml}")
@@ -343,6 +346,7 @@ class TaskHandler(ServerBase):
             self.stop()
             return
 
+        self.sio = self.build_sio_client()
         self.sio.connect(self.service_api_host, headers=headers, namespaces=['/helper', '/tasking'])
 
         self.received_folder_path = os.path.join(tempfile.gettempdir(), self.service.name.lower(), 'received')
