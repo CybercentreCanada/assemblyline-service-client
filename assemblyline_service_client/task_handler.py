@@ -76,7 +76,7 @@ class TaskHandler(ServerBase):
         self.service_manifest_yml = '/etc/assemblyline/service_manifest.yml'
         self.constants_json = '/etc/assemblyline/constants.json'
 
-        self.sio = socketio.Client()
+        self.sio = socketio.Client(logger=self.log, engineio_logger=self.log)
         self.status = None
 
         self.wait_start = None
