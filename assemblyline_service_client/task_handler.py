@@ -1,11 +1,10 @@
-#!/usr/bin/env python
-
 import json
 import os
 import shutil
 import tempfile
 import time
 from queue import Empty
+from typing import BinaryIO
 
 import socketio
 import yaml
@@ -91,6 +90,8 @@ class TaskHandler(ServerBase):
 
         self.container_id = os.environ['HOSTNAME']
 
+        self.file_upload_count = 0
+
         self.received_folder_path = None
         self.completed_folder_path = None
         self.sio = self.build_sio_client()
@@ -103,7 +104,26 @@ class TaskHandler(ServerBase):
         sio.on('got_task', handler=self.on_got_task, namespace='/tasking')
         sio.on('write_file_chunk', handler=self.write_file_chunk, namespace='/helper')
         sio.on('quit', handler=self.on_quit, namespace='/helper')
+        sio.on('upload_success', handler=self.on_upload_success, namespace='/helper')
         return sio
+
+    def callback_file_exists(self, sha256, file_path, temp_file, classification, ttl):
+        # File doesn't exist on the service server, start upload
+        if sha256:
+            file_size = os.path.getsize(file_path)
+            offset = 0
+            chunk_size = 64 * 1024
+            with open(file_path, 'rb') as f:
+                last_chunk = False
+                for chunk in read_in_chunks(f, chunk_size):
+                    if (file_size < chunk_size) or ((offset + chunk_size) >= file_size):
+                        last_chunk = True
+
+                    self.sio.emit('upload_file_chunk', (temp_file, offset, chunk, last_chunk, classification, sha256, ttl),
+                                  namespace='/helper')
+                    offset += chunk_size
+        else:
+            self.file_upload_count += 1
 
     def callback_get_classification_definition(self, classification_definition):
         self.log.info(f"Received classification definition. Saving it to: {self.classification_yml}")
@@ -153,9 +173,8 @@ class TaskHandler(ServerBase):
                     self.file_required = service_manifest_data.get('file_required', True)
 
                     # Pop the 'extra' data from the service manifest
-                    service_manifest_data.pop('file_required', None)
-                    service_manifest_data.pop('tool_version', None)
-                    service_manifest_data.pop('heuristics', None)
+                    for x in ['file_required', 'tool_version', 'heuristics']:
+                        service_manifest_data.pop(x, None)
 
                     self.service = Service(service_manifest_data)
 
@@ -252,12 +271,19 @@ class TaskHandler(ServerBase):
 
                     new_files = result.response.extracted + result.response.supplementary
                     if new_files:
+                        new_file_count = 0
+                        self.file_upload_count = 0
+
                         for file in new_files:
+                            new_file_count += 1
                             file_path = os.path.join(self.completed_folder_path, file.name)
-                            with open(file_path, 'rb') as f:
-                                self.sio.emit('upload_file',
-                                              (f.read(), result.classification.value, file.sha256, task.ttl),
-                                              namespace='/helper')
+                            self.sio.emit('file_exists', (file.sha256, file_path, result.classification.value, task.ttl),
+                                          namespace='/helper', callback=self.callback_file_exists)
+
+                        # Wait until all files have been uploaded before marking task as completed
+                        while self.file_upload_count != new_file_count:
+                            self.log.info(f"Waiting for files to be uploaded: {self.file_upload_count}/{new_file_count}")
+                            time.sleep(1)
 
                     self.sio.emit('done_task', (exec_time, task.as_primitives(), result.as_primitives()),
                                   namespace='/tasking')
@@ -284,6 +310,10 @@ class TaskHandler(ServerBase):
 
     def on_quit(self, *args):
         self.stop()
+
+    def on_upload_success(self, success):
+        if success:
+            self.file_upload_count += 1
 
     @staticmethod
     def cleanup_working_directory(folder_path):
@@ -390,6 +420,14 @@ class TaskHandler(ServerBase):
             self.sio.disconnect()
 
         super().stop()
+
+
+def read_in_chunks(file_object: BinaryIO, chunk_size: int):
+    while True:
+        data = file_object.read(chunk_size)
+        if not data:
+            break
+        yield data
 
 
 if __name__ == '__main__':
