@@ -283,6 +283,8 @@ class TaskHandler(ServerBase):
                             # TODO This is a temporary patch to make file uploading serial until we
                             #      understand if it is interfearing on the socket layer somehow
                             while self.file_upload_count != new_file_count:
+                                self.log.info(
+                                    f"Waiting for files to be uploaded: {self.file_upload_count}/{new_file_count}")
                                 time.sleep(0.1)
 
                         # Wait until all files have been uploaded before marking task as completed
