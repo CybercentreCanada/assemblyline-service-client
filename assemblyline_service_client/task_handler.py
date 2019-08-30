@@ -4,7 +4,7 @@ import shutil
 import tempfile
 import time
 from queue import Empty
-from typing import BinaryIO
+from typing import BinaryIO, Generator
 
 import socketio
 import yaml
@@ -280,6 +280,11 @@ class TaskHandler(ServerBase):
                             self.sio.emit('file_exists', (file.sha256, file_path, result.classification.value, task.ttl),
                                           namespace='/helper', callback=self.callback_file_exists)
 
+                            # TODO This is a temporary patch to make file uploading serial until we
+                            #      understand if it is interfearing on the socket layer somehow
+                            while self.file_upload_count != new_file_count:
+                                time.sleep(0.1)
+
                         # Wait until all files have been uploaded before marking task as completed
                         while self.file_upload_count != new_file_count:
                             self.log.info(f"Waiting for files to be uploaded: {self.file_upload_count}/{new_file_count}")
@@ -422,7 +427,7 @@ class TaskHandler(ServerBase):
         super().stop()
 
 
-def read_in_chunks(file_object: BinaryIO, chunk_size: int):
+def read_in_chunks(file_object: BinaryIO, chunk_size: int) -> Generator[bytes]:
     while True:
         data = file_object.read(chunk_size)
         if not data:
