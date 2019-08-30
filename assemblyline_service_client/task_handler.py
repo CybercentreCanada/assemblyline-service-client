@@ -4,7 +4,7 @@ import shutil
 import tempfile
 import time
 from queue import Empty
-from typing import BinaryIO, Generator
+from typing import BinaryIO
 
 import socketio
 import yaml
@@ -427,7 +427,7 @@ class TaskHandler(ServerBase):
         super().stop()
 
 
-def read_in_chunks(file_object: BinaryIO, chunk_size: int) -> Generator[bytes]:
+def read_in_chunks(file_object: BinaryIO, chunk_size: int):
     while True:
         data = file_object.read(chunk_size)
         if not data:
