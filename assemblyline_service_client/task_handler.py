@@ -3,6 +3,7 @@ import os
 import shutil
 import tempfile
 import time
+import signal
 from queue import Empty
 from typing import BinaryIO
 
@@ -95,6 +96,14 @@ class TaskHandler(ServerBase):
         self.received_folder_path = None
         self.completed_folder_path = None
         self.sio = self.build_sio_client()
+
+    def start(self):
+        super().start()
+        signal.signal(signal.SIGUSR1, self.handle_service_crash)
+
+    def handle_service_crash(self):
+        """USER1 is raised when the service has crashed, this represents a unknown error."""
+        self.queue.put((None, STATUSES.ERROR_FOUND))
 
     def build_sio_client(self):
         sio = socketio.Client(logger=self.log, engineio_logger=self.log)
