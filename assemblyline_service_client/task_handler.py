@@ -71,9 +71,7 @@ class TaskHandler(ServerBase):
     def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT):
         super().__init__('assemblyline.service.task_handler', shutdown_timeout=shutdown_timeout)
 
-        self.classification_yml = '/etc/assemblyline/classification.yml'
-        self.service_manifest_yml = '/etc/assemblyline/service_manifest.yml'
-        self.constants_json = '/etc/assemblyline/constants.json'
+        self.service_manifest_yml = '/tmp/service_manifest.yml'
 
         self.status = None
 
@@ -133,18 +131,6 @@ class TaskHandler(ServerBase):
         else:
             self.file_upload_count += 1
 
-    def callback_get_classification_definition(self, classification_definition):
-        self.log.info(f"Received classification definition. Saving it to: {self.classification_yml}")
-
-        with open(self.classification_yml, 'w') as fh:
-            yaml.safe_dump(classification_definition, fh)
-
-    def callback_get_system_constants(self, system_constants):
-        self.log.info(f"Received system constants. Saving them to: {self.constants_json}")
-
-        with open(self.constants_json, 'w') as fh:
-            json.dump(system_constants, fh)
-
     def callback_register_service(self, keep_alive):
         if keep_alive:
             self.status = STATUSES.WAITING_FOR_TASK
@@ -162,13 +148,6 @@ class TaskHandler(ServerBase):
         self.status = STATUSES.WAITING_FOR_TASK
 
         self.wait_start = time.time()
-
-    def get_classification(self):
-        self.log.info("Requesting classification definition...")
-
-        # Get classification definition and save it
-        self.sio.emit('get_classification_definition', namespace='/helper',
-                      callback=self.callback_get_classification_definition)
 
     def load_service_manifest(self):
         # Load from the service manifest yaml
@@ -193,11 +172,6 @@ class TaskHandler(ServerBase):
 
             if not self.service:
                 time.sleep(5)
-
-    def get_systems_constants(self):
-        self.log.info("Requesting system constants...")
-
-        self.sio.emit('get_system_constants', namespace='/helper', callback=self.callback_get_system_constants)
 
     def on_connect(self):
         self.log.info("Connected to tasking SocketIO server")
@@ -286,8 +260,8 @@ class TaskHandler(ServerBase):
 
                         for file in new_files:
                             new_file_count += 1
-                            file_path = os.path.join(self.completed_folder_path, file.name)
-                            self.sio.emit('file_exists', (file['sha256'], file_path, result['classification']['value'],
+                            file_path = os.path.join(self.completed_folder_path, file['name'])
+                            self.sio.emit('file_exists', (file['sha256'], file_path, result['classification'],
                                                           task.ttl),
                                           namespace='/helper', callback=self.callback_file_exists)
 
@@ -329,7 +303,7 @@ class TaskHandler(ServerBase):
 
                 break
 
-        except Exception as e:
+        except Exception:
             self.log.exception("An exception occurred processing a task")
             raise
         finally:
@@ -346,6 +320,7 @@ class TaskHandler(ServerBase):
         if success:
             self.file_upload_count += 1
 
+    # noinspection PyBroadException
     @staticmethod
     def cleanup_working_directory(folder_path):
         for file in os.listdir(folder_path):
@@ -355,7 +330,7 @@ class TaskHandler(ServerBase):
                     os.unlink(file_path)
                 elif os.path.isdir(file_path):
                     shutil.rmtree(file_path)
-            except:
+            except Exception:
                 pass
 
     def try_run(self):
@@ -384,9 +359,6 @@ class TaskHandler(ServerBase):
                     self.log.warning(f"Can't connect to SocketIO service server: {self.service_api_host}")
                 time.sleep(5)
                 retry_count += 1
-
-        self.get_classification()
-        # self.get_systems_constants()
 
         # Register service
         self.sio.emit('register_service', self.service.as_primitives(), namespace='/helper',
