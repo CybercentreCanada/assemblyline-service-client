@@ -1,9 +1,9 @@
 import json
 import os
 import shutil
+import signal
 import tempfile
 import time
-import signal
 from queue import Empty
 from typing import BinaryIO
 
@@ -14,11 +14,10 @@ from watchdog.observers import Observer
 from watchdog.observers.api import EventQueue
 
 from assemblyline.common.digests import get_sha256_for_file
+from assemblyline.common.isotime import now_as_iso
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task
 from assemblyline.odm.models.error import Error
-from assemblyline.odm.models.heuristic import Heuristic
-from assemblyline.odm.models.result import Result
 from assemblyline.odm.models.service import Service
 from assemblyline_core.server_base import ServerBase
 
@@ -181,14 +180,16 @@ class TaskHandler(ServerBase):
                     self.service_tool_version = service_manifest_data.get('tool_version')
                     self.file_required = service_manifest_data.get('file_required', True)
 
+                    # Save the heuristics from service manifest
+                    for heuristic in service_manifest_data.get('heuristics', []):
+                        self.service_heuristics.append(heuristic)
+                    self.log.info(f"Found {len(self.service_heuristics)} heuristics")
+
                     # Pop the 'extra' data from the service manifest
                     for x in ['file_required', 'tool_version', 'heuristics']:
                         service_manifest_data.pop(x, None)
 
                     self.service = Service(service_manifest_data)
-
-                    for heuristic in service_manifest_data.get('heuristics', []):
-                        self.service_heuristics.append(Heuristic(heuristic))
 
             if not self.service:
                 time.sleep(5)
@@ -276,9 +277,9 @@ class TaskHandler(ServerBase):
                 if self.status == STATUSES.RESULT_FOUND:
                     result_json_path = json_path
                     with open(result_json_path, 'r') as f:
-                        result = Result(json.load(f))
+                        result = json.load(f)
 
-                    new_files = result.response.extracted + result.response.supplementary
+                    new_files = result['response']['extracted'] + result['response']['supplementary']
                     if new_files:
                         new_file_count = 0
                         self.file_upload_count = 0
@@ -286,7 +287,8 @@ class TaskHandler(ServerBase):
                         for file in new_files:
                             new_file_count += 1
                             file_path = os.path.join(self.completed_folder_path, file.name)
-                            self.sio.emit('file_exists', (file.sha256, file_path, result.classification.value, task.ttl),
+                            self.sio.emit('file_exists', (file['sha256'], file_path, result['classification']['value'],
+                                                          task.ttl),
                                           namespace='/helper', callback=self.callback_file_exists)
 
                             # TODO This is a temporary patch to make file uploading serial until we
@@ -301,13 +303,26 @@ class TaskHandler(ServerBase):
                             self.log.info(f"Waiting for files to be uploaded: {self.file_upload_count}/{new_file_count}")
                             time.sleep(1)
 
-                    self.sio.emit('done_task', (exec_time, task.as_primitives(), result.as_primitives()),
-                                  namespace='/tasking')
+                    self.sio.emit('done_task', (exec_time, task.as_primitives(), result), namespace='/tasking')
 
                 elif self.status == STATUSES.ERROR_FOUND:
-                    error_json_path = json_path
-                    with open(error_json_path, 'r') as f:
-                        error = Error(json.load(f))
+                    if json_path is None:
+                        error = Error(dict(
+                            created='NOW',
+                            expiry_ts=now_as_iso(task.ttl * 24 * 60 * 60),
+                            response=dict(
+                                message="The service instance processing this task has terminated unexpectedly.",
+                                service_name=task.service_name,
+                                service_version=' ',
+                                status='FAIL_NONRECOVERABLE',
+                            ),
+                            sha256=task.fileinfo.sha256,
+                            type='UNKNOWN',
+                        ))
+                    else:
+                        error_json_path = json_path
+                        with open(error_json_path, 'r') as f:
+                            error = Error(json.load(f))
 
                     self.sio.emit('done_task', (exec_time, task.as_primitives(), error.as_primitives()),
                                   namespace='/tasking')
@@ -378,9 +393,9 @@ class TaskHandler(ServerBase):
                       callback=self.callback_register_service)
 
         # Save any new service Heuristic(s)
-        heuristics = [heuristic.as_primitives() for heuristic in self.service_heuristics]
-        if heuristics:
-            self.sio.emit('save_heuristics', heuristics, namespace='/helper', callback=self.callback_save_heuristic)
+        if self.service_heuristics:
+            self.sio.emit('save_heuristics', self.service_heuristics, namespace='/helper',
+                          callback=self.callback_save_heuristic)
 
         # Wait until service initialization is complete
         while self.status == STATUSES.INITIALIZING:
