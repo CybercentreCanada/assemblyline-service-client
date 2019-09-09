@@ -71,7 +71,7 @@ class TaskHandler(ServerBase):
     def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT):
         super().__init__('assemblyline.service.task_handler', shutdown_timeout=shutdown_timeout)
 
-        self.service_manifest_yml = '/tmp/service_manifest.yml'
+        self.service_manifest_yml = os.path.join(tempfile.gettempdir(), 'service_manifest.yml')
 
         self.status = None
 
