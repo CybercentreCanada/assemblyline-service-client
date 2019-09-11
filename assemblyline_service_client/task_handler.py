@@ -8,6 +8,7 @@ from queue import Empty
 from typing import BinaryIO
 
 import socketio
+import socketio.exceptions
 import yaml
 from watchdog.events import PatternMatchingEventHandler
 from watchdog.observers import Observer
@@ -69,7 +70,7 @@ class FileWatcher:
 
 
 class TaskHandler(ServerBase):
-    def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT):
+    def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT, api_host=None, api_key=None, container_id=None):
         super().__init__('assemblyline.service.task_handler', shutdown_timeout=shutdown_timeout)
 
         self.service_manifest_yml = os.path.join(tempfile.gettempdir(), 'service_manifest.yml')
@@ -84,17 +85,15 @@ class TaskHandler(ServerBase):
         self.service_heuristics = []
         self.service_tool_version = None
         self.file_required = None
-        self.service_api_host = os.environ.get('SERVICE_API_HOST', 'http://localhost:5003')
-        self.service_api_auth_key = os.environ.get('SERVICE_API_AUTH_KEY', DEFAULT_API_KEY)
-        self.container_id = os.environ.get('HOSTNAME', "dev-service")
+        self.service_api_host = api_host or os.environ.get('SERVICE_API_HOST', 'http://localhost:5003')
+        self.service_api_auth_key = api_key or os.environ.get('SERVICE_API_AUTH_KEY', DEFAULT_API_KEY)
+        self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
 
         self.file_upload_count = 0
 
         self.received_folder_path = None
         self.completed_folder_path = None
         self.sio = self.build_sio_client()
-
-
 
     def start(self):
         self.log.info("Loading service manifest...")
@@ -112,7 +111,7 @@ class TaskHandler(ServerBase):
         super().start()
         signal.signal(signal.SIGUSR1, self.handle_service_crash)
 
-    def handle_service_crash(self):
+    def handle_service_crash(self, signum, frame):
         """USER1 is raised when the service has crashed, this represents a unknown error."""
         self.queue.put((None, STATUSES.ERROR_FOUND))
 
@@ -271,26 +270,23 @@ class TaskHandler(ServerBase):
                     new_files = result['response']['extracted'] + result['response']['supplementary']
                     if new_files:
                         new_file_count = 0
+                        log_time = 0
                         self.file_upload_count = 0
 
                         for file in new_files:
                             new_file_count += 1
                             file_path = os.path.join(self.completed_folder_path, file['name'])
-                            self.sio.emit('file_exists', (file['sha256'], file_path, result['classification'],
-                                                          task.ttl),
-                                          namespace='/helper', callback=self.callback_file_exists)
+                            self.sio.emit('file_exists', namespace='/helper', callback=self.callback_file_exists,
+                                          data=(file['sha256'], file_path, result['classification'], task.ttl))
 
-                            # TODO This is a temporary patch to make file uploading serial until we
-                            #      understand if it is interfearing on the socket layer somehow
                             while self.file_upload_count != new_file_count:
-                                self.log.info(
-                                    f"Waiting for files to be uploaded: {self.file_upload_count}/{new_file_count}")
                                 time.sleep(0.1)
 
-                        # Wait until all files have been uploaded before marking task as completed
-                        while self.file_upload_count != new_file_count:
-                            self.log.info(f"Waiting for files to be uploaded: {self.file_upload_count}/{new_file_count}")
-                            time.sleep(1)
+                                # Every 10 seconds print a log message about how the updates are going
+                                if time.time() - log_time > 10:
+                                    log_time = time.time()
+                                    self.log.info(f"Waiting for files to be uploaded: "
+                                                  f"{self.file_upload_count}/{new_file_count}")
 
                     self.sio.emit('done_task', (exec_time, task.as_primitives(), result), namespace='/tasking')
 
