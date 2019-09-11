@@ -33,6 +33,7 @@ STATUSES = StringTable('STATUSES', [
 ])
 
 SHUTDOWN_SECONDS_LIMIT = 10
+DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
 
 
 class FileEventHandler(PatternMatchingEventHandler):
@@ -83,10 +84,9 @@ class TaskHandler(ServerBase):
         self.service_heuristics = []
         self.service_tool_version = None
         self.file_required = None
-        self.service_api_host = os.environ['SERVICE_API_HOST']
-        self.service_api_auth_key = os.environ['SERVICE_API_AUTH_KEY']
-
-        self.container_id = os.environ['HOSTNAME']
+        self.service_api_host = os.environ.get('SERVICE_API_HOST', 'http://localhost:5003')
+        self.service_api_auth_key = os.environ.get('SERVICE_API_AUTH_KEY', DEFAULT_API_KEY)
+        self.container_id = os.environ.get('HOSTNAME', "dev-service")
 
         self.file_upload_count = 0
 
@@ -94,7 +94,21 @@ class TaskHandler(ServerBase):
         self.completed_folder_path = None
         self.sio = self.build_sio_client()
 
+
+
     def start(self):
+        self.log.info("Loading service manifest...")
+        if self.service_api_auth_key == DEFAULT_API_KEY:
+            key = '**default key** - You should consider setting SERVICE_API_AUTH_KEY in your service containers'
+        else:
+            key = '**custom key**'
+        self.log.info("---- TaskHandler config ----")
+        self.log.info(f"SERVICE_API_HOST: {self.service_api_host}")
+        self.log.info(f"SERVICE_API_AUTH_KEY: {key}")
+        self.log.info(f"CONTAINER-ID: {self.container_id}")
+        self.load_service_manifest()
+        self.log.info("----------------------------")
+
         super().start()
         signal.signal(signal.SIGUSR1, self.handle_service_crash)
 
@@ -151,7 +165,6 @@ class TaskHandler(ServerBase):
 
     def load_service_manifest(self):
         # Load from the service manifest yaml
-        self.log.info("Trying to load service manifest YAML...")
         while not self.service:
             if os.path.exists(self.service_manifest_yml):
                 with open(self.service_manifest_yml, 'r') as yml_fh:
@@ -162,7 +175,6 @@ class TaskHandler(ServerBase):
                     # Save the heuristics from service manifest
                     for heuristic in service_manifest_data.get('heuristics', []):
                         self.service_heuristics.append(heuristic)
-                    self.log.info(f"Found {len(self.service_heuristics)} heuristics")
 
                     # Pop the 'extra' data from the service manifest
                     for x in ['file_required', 'tool_version', 'heuristics']:
@@ -172,6 +184,9 @@ class TaskHandler(ServerBase):
 
             if not self.service:
                 time.sleep(5)
+            else:
+                self.log.info(f'SERVICE: {self.service.name}')
+                self.log.info(f"HEURISTICS_COUNT: {len(self.service_heuristics)}")
 
     def on_connect(self):
         self.log.info("Connected to tasking SocketIO server")
@@ -335,7 +350,6 @@ class TaskHandler(ServerBase):
 
     def try_run(self):
         self.status = STATUSES.INITIALIZING
-        self.load_service_manifest()
 
         headers = {
             'Container-Id': self.container_id,
