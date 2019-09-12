@@ -147,9 +147,10 @@ class TaskHandler(ServerBase):
                     while self.processing_upload:
                         time.sleep(0.1)
 
+                    self.processing_upload = True
                     self.sio.emit('upload_file_chunk', (offset, chunk, last_chunk, classification, sha256, ttl),
                                   namespace='/helper')
-                    self.processing_upload = True
+
                     offset += chunk_size
         else:
             self.file_upload_count += 1
