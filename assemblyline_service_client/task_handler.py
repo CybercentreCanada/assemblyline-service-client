@@ -90,6 +90,7 @@ class TaskHandler(ServerBase):
         self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
 
         self.file_upload_count = 0
+        self.processing_upload = False
 
         self.received_folder_path = None
         self.completed_folder_path = None
@@ -124,9 +125,14 @@ class TaskHandler(ServerBase):
         sio.on('write_file_chunk', handler=self.write_file_chunk, namespace='/helper')
         sio.on('quit', handler=self.on_quit, namespace='/helper')
         sio.on('upload_success', handler=self.on_upload_success, namespace='/helper')
+        sio.on('chunk_upload_success', handler=self.on_chunk_upload_success, namespace='/helper')
         return sio
 
-    def callback_file_exists(self, sha256, file_path, temp_file, classification, ttl):
+    def on_chunk_upload_success(self, success):
+        if success:
+            self.processing_upload = False
+
+    def callback_file_exists(self, sha256, file_path, classification, ttl):
         # File doesn't exist on the service server, start upload
         if sha256:
             file_size = os.path.getsize(file_path)
@@ -138,8 +144,12 @@ class TaskHandler(ServerBase):
                     if (file_size < chunk_size) or ((offset + chunk_size) >= file_size):
                         last_chunk = True
 
-                    self.sio.emit('upload_file_chunk', (temp_file, offset, chunk, last_chunk, classification, sha256, ttl),
+                    while self.processing_upload:
+                        time.sleep(0.1)
+
+                    self.sio.emit('upload_file_chunk', (offset, chunk, last_chunk, classification, sha256, ttl),
                                   namespace='/helper')
+                    self.processing_upload = True
                     offset += chunk_size
         else:
             self.file_upload_count += 1
