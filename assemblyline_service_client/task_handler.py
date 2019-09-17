@@ -6,7 +6,7 @@ import signal
 import tempfile
 import time
 from queue import Empty
-from typing import BinaryIO
+from typing import BinaryIO, Optional
 import requests
 
 import yaml
@@ -56,10 +56,11 @@ class FileEventHandler(PatternMatchingEventHandler):
 
 
 class FileWatcher:
-    def __init__(self, queue, watch_path):
+    def __init__(self, queue, watch_path: str, logger=None):
         self.watch_path = watch_path
         self.observer = None
         self.queue = queue
+        self.log = logger
 
     def start(self):
         patt = ['*.json']
@@ -94,9 +95,6 @@ class TaskHandler(ServerBase):
         self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
         self.session = None
         self.headers = None
-
-        self.file_upload_count = 0
-        self.processing_upload = False
 
         self.received_dir = None
         self.completed_dir = None
@@ -162,7 +160,7 @@ class TaskHandler(ServerBase):
                 time.sleep(5)
             else:
                 self.log.info(f"SERVICE: {self.service.name}")
-                self.log.info(f"HEURISTICS COUNT: {len(self.service_heuristics)}")
+                self.log.info(f"HEURISTICS_COUNT: {len(self.service_heuristics)}")
 
     # noinspection PyBroadException
     @staticmethod
@@ -203,7 +201,11 @@ class TaskHandler(ServerBase):
 
             # Download file if required by service
             if self.file_required:
-                self.download_file(task.fileinfo.sha256)
+                file_path = self.download_file(task.fileinfo.sha256)
+
+                # Check if file_path was returned, meaning the file was downloaded successfully
+                if file_path is None:
+                    continue
 
             # Save task as JSON, so that run_service can start processing task
             task_json_path = os.path.join(self.received_dir, f'{task.fileinfo.sha256}_task.json')
@@ -214,11 +216,11 @@ class TaskHandler(ServerBase):
             self.status = STATUSES.PROCESSING
 
             # Wait until the task completes with a result or error produced
-            json_path = ''
-            while self.status != STATUSES.RESULT_FOUND or self.status != STATUSES.ERROR_FOUND:
+            while True:
                 try:
                     json_path, status = self.queue.get(timeout=1)
                     self.status = status
+                    break
                 except Empty:
                     pass
 
@@ -228,12 +230,14 @@ class TaskHandler(ServerBase):
             elif self.status == STATUSES.ERROR_FOUND:
                 self.handle_task_error(json_path, task)
 
+            # Cleanup contents of 'received' and 'completed' directory
+            self.cleanup_working_directory(self.received_dir)
+            self.cleanup_working_directory(self.completed_dir)
+
     def initialize_service(self):
         self.status = STATUSES.INITIALIZING
         r = self.request_with_retries('put', self._path('service', 'register'), json=self.service_manifest_data)
-        if r['keep_alive']:
-            self.status = STATUSES.WAITING_FOR_TASK
-        else:
+        if not r['keep_alive']:
             self.log.info(f"Service registered with {len(r['new_heuristics'])} heuristics. Now stopping...")
             self.status = STATUSES.STOPPING
             self.stop()
@@ -250,11 +254,12 @@ class TaskHandler(ServerBase):
             os.makedirs(self.completed_dir)
 
         # Start the file watcher for the completed folder
-        self.file_watcher = FileWatcher(self.queue, self.completed_dir)
+        self.file_watcher = FileWatcher(self.queue, self.completed_dir, self.log)
         self.file_watcher.start()
         self.log.info(f"Started watching folder for result/error: {self.completed_dir}")
 
     def get_task(self) -> ServiceTask:
+        self.status = STATUSES.WAITING_FOR_TASK
         task = None
         headers = dict(timeout=str(TASK_REQUEST_TIMEOUT))
         self.log.info(f"Requesting a task with {TASK_REQUEST_TIMEOUT}s timeout...")
@@ -263,53 +268,71 @@ class TaskHandler(ServerBase):
             self.log.info(f"No task received")
         else:  # Task received
             try:
-                task = ServiceTask(task)
+                task = ServiceTask(r['task'])
+                self.log.info(f"Received task (SID: {task.sid})")
             except ValueError as e:
                 self.log.error(f"Invalid task received: {str(e)}")
                 # TODO: return error to service server
 
         return task
 
-    def download_file(self, sha256) -> None:
+    def download_file(self, sha256) -> Optional[str]:
+        self.status = STATUSES.DOWNLOADING_FILE
         received_file_sha256 = ''
         retry = 0
+        file_path = None
+        self.log.info(f"Downloading file (SHA256: {sha256})")
         while received_file_sha256 != sha256 and retry < 3:
-            r = self.session.get(self._path('file', sha256), headers=self.headers, stream=True)
-            file_path = os.path.join(self.received_dir, sha256)
-            with open(file_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:  # filter out keep-alive new chunks
-                        f.write(chunk)
-                        f.flush()
-
-            received_file_sha256 = get_sha256_for_file(file_path)
+            r = self.session.get(self._path('file', sha256), headers=self.headers)
             retry += 1
+            # self.log.info(str(r.ok))
+            if r.status_code == 404:
+                self.log.error(f"Requested file not found in the system ({sha256})")
+                return None
+            else:
+                file_path = os.path.join(self.received_dir, sha256)
+                with open(file_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024):
+                        if chunk:  # filter out keep-alive new chunks
+                            f.write(chunk)
+
+                received_file_sha256 = get_sha256_for_file(file_path)
 
         if received_file_sha256 != sha256:
             self.log.error(f"File (SHA256: {sha256}) could not be downloaded after 3 tries. "
-                           "Reporting task error to service service server.")
+                           "Reporting task error to service server.")
             # TODO: report error to service server
+            return None
+
+        self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
+        return file_path
 
     def handle_task_result(self, result_json_path: str, task: ServiceTask):
         with open(result_json_path, 'r') as f:
             result = json.load(f)
 
+        # Map of file info by SHA256
+        result_files = {file['sha256']: file for file in
+                        result['response']['extracted'] + result['response']['supplementary']}
+
         data = dict(task=task.as_primitives(), result=result)
         r = self.request_with_retries('post', self._path('task'), json=data)
-        if r['requested_files']:
-            # Map of file info by SHA256
-            result_files = {file['sha256']: file for file in
-                            result['response']['extracted'] + result['response']['supplementary']}
+        if not r['success'] and r['missing_files']:
+            while not r['success'] and r['missing_files']:
+                for f_sha256 in r['missing_files']:
+                    file_info = result_files[f_sha256]
+                    headers = dict(
+                        sha256=file_info['sha256'],
+                        classification=file_info['classification'],
+                        ttl=str(task.ttl),
+                    )
 
-            files = dict()
-            for f_sha256 in r['requested_files']:
-                file_info = result_files[f_sha256]
-                files[f_sha256] = (f_sha256, open(os.path.join(self.completed_dir, file_info['name']), 'rb'),
-                                   'application/octet-stream',
-                                   dict(classification=file_info['classification'], ttl=task.ttl))
+                    files = dict(file=open(os.path.join(self.completed_dir, file_info['name']), 'rb'))
 
-            # Upload the files requested by service server
-            r = self.request_with_retries('put', self._path('file'), files=files)
+                    # Upload the file requested by service server
+                    self.request_with_retries('put', self._path('file'), files=files, headers=headers)
+
+                r = self.request_with_retries('post', self._path('task'), json=data)
 
     def handle_task_error(self, error_json_path: str, task: ServiceTask):
         if error_json_path is None:
