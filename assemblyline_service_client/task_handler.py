@@ -180,16 +180,29 @@ class TaskHandler(ServerBase):
             self.session.headers.update(kwargs['headers'])
             kwargs.pop('headers')
 
-        retries = 0
+        back_off_time = 1
+
+        def update_back_off_time():
+            global back_off_time
+            back_off_time = min(back_off_time*2, 30)
 
         while True:
             try:
                 func = getattr(self.session, method)
                 return func(url, **kwargs).json()['api_response']
             except requests.ConnectionError:
-                pass
+                time.sleep(back_off_time)
+                self.log.error(f"ConnectionError. Retrying after {back_off_time}s.")
             except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
-                pass
+                time.sleep(back_off_time)
+            except requests.HTTPError as e:
+                self.log.error(str(e))
+                raise
+            except requests.exceptions.RequestException as e:  # All other types of exceptions
+                self.log.error(str(e))
+                raise
+
+            update_back_off_time()
 
     def try_run(self):
         self.initialize_service()
