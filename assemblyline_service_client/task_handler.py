@@ -343,6 +343,7 @@ class TaskHandler(ServerBase):
                     files = dict(file=open(os.path.join(self.completed_dir, file_info['name']), 'rb'))
 
                     # Upload the file requested by service server
+                    self.log.info(f"Uploading file (Name: {file_info['name']}, SHA256: {file_info['sha256']})")
                     self.request_with_retries('put', self._path('file'), files=files, headers=headers)
 
                 r = self.request_with_retries('post', self._path('task'), json=data)
