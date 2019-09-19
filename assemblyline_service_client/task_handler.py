@@ -124,7 +124,7 @@ class TaskHandler(ServerBase):
             container_id=self.container_id,
             service_name=self.service.name,
             service_version=self.service.version,
-            service_timeout=str(self.service.timeout),
+            service_tool_version=self.service_tool_version,
         )
 
         self.session = requests.Session()
