@@ -182,10 +182,6 @@ class TaskHandler(ServerBase):
 
         back_off_time = 1
 
-        def update_back_off_time():
-            global back_off_time
-            back_off_time = min(back_off_time*2, 30)
-
         while True:
             try:
                 func = getattr(self.session, method)
@@ -204,7 +200,7 @@ class TaskHandler(ServerBase):
                 self.log.exception(str(e))
                 raise
 
-            update_back_off_time()
+            back_off_time = min(back_off_time*2, 30)
 
     def try_run(self):
         self.initialize_service()
