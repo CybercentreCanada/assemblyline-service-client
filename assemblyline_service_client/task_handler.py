@@ -189,17 +189,19 @@ class TaskHandler(ServerBase):
         while True:
             try:
                 func = getattr(self.session, method)
-                return func(url, **kwargs).json()['api_response']
+                resp = func(url, **kwargs)
+                resp.raise_for_status()
+                return resp.json()['api_response']
             except requests.ConnectionError:
                 time.sleep(back_off_time)
-                self.log.error(f"ConnectionError. Retrying after {back_off_time}s.")
+                self.log.exception(f"ConnectionError. Retrying after {back_off_time}s.")
             except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
                 time.sleep(back_off_time)
             except requests.HTTPError as e:
-                self.log.error(str(e))
+                self.log.exception(str(e))
                 raise
             except requests.exceptions.RequestException as e:  # All other types of exceptions
-                self.log.error(str(e))
+                self.log.exception(str(e))
                 raise
 
             update_back_off_time()
