@@ -186,7 +186,13 @@ class TaskHandler(ServerBase):
             try:
                 func = getattr(self.session, method)
                 resp = func(url, **kwargs)
-                resp.raise_for_status()
+
+                if resp.status_code == 400 and resp.json():
+                    self.log.exception(resp.json()['api_error_message'])
+                    raise
+                else:
+                    resp.raise_for_status()
+
                 return resp.json()['api_response']
             except requests.ConnectionError:
                 time.sleep(back_off_time)
