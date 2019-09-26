@@ -1,23 +1,19 @@
 import copy
 import json
 import os
+import select
 import shutil
 import signal
 import tempfile
 import time
-from queue import Empty
-from typing import BinaryIO, Optional
 import requests
-
 import yaml
-from watchdog.events import PatternMatchingEventHandler
-from watchdog.observers import Observer
-from watchdog.observers.api import EventQueue
+
+from typing import Optional
 
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.isotime import now_as_iso
 from assemblyline.common.str_utils import StringTable
-from assemblyline.odm.messages.task import Task
 from assemblyline.odm.models.error import Error
 from assemblyline.odm.models.service import Service
 from assemblyline_core.server_base import ServerBase
@@ -38,39 +34,12 @@ SHUTDOWN_SECONDS_LIMIT = 10
 DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
 SUPPORTED_API = 'v1'
 TASK_REQUEST_TIMEOUT = 30
+TASK_FIFO_PATH = "/tmp/task.fifo"
+DONE_FIFO_PATH = "/tmp/done.fifo"
 
 
-class FileEventHandler(PatternMatchingEventHandler):
-    def __init__(self, queue, patterns):
-        PatternMatchingEventHandler.__init__(self, patterns=patterns)
-        self.queue = queue
-
-    def process(self, event):
-        if event.src_path.endswith('result.json'):
-            self.queue.put((event.src_path, STATUSES.RESULT_FOUND))
-        elif event.src_path.endswith('error.json'):
-            self.queue.put((event.src_path, STATUSES.ERROR_FOUND))
-
-    def on_created(self, event):
-        self.process(event)
-
-
-class FileWatcher:
-    def __init__(self, queue, watch_path: str, logger=None):
-        self.watch_path = watch_path
-        self.observer = None
-        self.queue = queue
-        self.log = logger
-
-    def start(self):
-        patt = ['*.json']
-        event_handler = FileEventHandler(self.queue, patterns=patt)
-        self.observer = Observer()
-        self.observer.schedule(event_handler, path=self.watch_path)
-        self.observer.start()
-
-    def stop(self):
-        self.observer.stop()
+class ServiceServerException(Exception):
+    pass
 
 
 class TaskHandler(ServerBase):
@@ -80,10 +49,9 @@ class TaskHandler(ServerBase):
         self.service_manifest_yml = os.path.join(tempfile.gettempdir(), 'service_manifest.yml')
 
         self.status = None
-
         self.wait_start = None
-        self.queue = EventQueue()
-        self.file_watcher = None
+        self.task_fifo = None
+        self.done_fifo = None
 
         self.service = None
         self.service_manifest_data = None
@@ -98,6 +66,7 @@ class TaskHandler(ServerBase):
 
         self.received_dir = None
         self.completed_dir = None
+        self.task = None
 
     def _path(self, prefix, *args):
         """
@@ -133,9 +102,11 @@ class TaskHandler(ServerBase):
         super().start()
         signal.signal(signal.SIGUSR1, self.handle_service_crash)
 
+    # noinspection PyUnusedLocal
     def handle_service_crash(self, signum, frame):
         """USER1 is raised when the service has crashed, this represents an unknown error."""
-        self.queue.put((None, STATUSES.ERROR_FOUND))
+        self.handle_task_error("", self.task)
+        self.stop()
 
     def load_service_manifest(self):
         # Load from the service manifest yaml
@@ -189,7 +160,7 @@ class TaskHandler(ServerBase):
 
                 if resp.status_code == 400 and resp.json():
                     self.log.exception(resp.json()['api_error_message'])
-                    raise
+                    raise ServiceServerException(resp.json()['api_error_message'])
                 else:
                     resp.raise_for_status()
 
@@ -212,40 +183,47 @@ class TaskHandler(ServerBase):
         self.initialize_service()
 
         while self.running:
-            task = self.get_task()
-            if not task:
+            self.task = self.get_task()
+            if not self.task:
                 continue
 
             # Download file if required by service
             if self.file_required:
-                file_path = self.download_file(task.fileinfo.sha256)
+                file_path = self.download_file(self.task.fileinfo.sha256)
 
                 # Check if file_path was returned, meaning the file was downloaded successfully
                 if file_path is None:
                     continue
 
             # Save task as JSON, so that run_service can start processing task
-            task_json_path = os.path.join(self.received_dir, f'{task.fileinfo.sha256}_task.json')
+            task_json_path = os.path.join(self.received_dir, f'{self.task.fileinfo.sha256}_task.json')
             with open(task_json_path, 'w') as f:
-                json.dump(task.as_primitives(), f)
+                json.dump(self.task.as_primitives(), f)
             self.log.info(f"Saved task to: {task_json_path}")
 
             self.status = STATUSES.PROCESSING
 
-            # Wait until the task completes with a result or error produced
+            # Send tasking message to run_service
+            self.task_fifo.write(f"{task_json_path}\n")
+            self.task_fifo.flush()
+
             while True:
                 try:
-                    json_path, status = self.queue.get(timeout=1)
-                    self.status = status
-                    break
-                except Empty:
-                    pass
+                    read_ready, _, _ = select.select([self.done_fifo], [], [], 1)
+                    if read_ready:
+                        break
+                except ValueError:
+                    self.log.info('Done fifo is closed. Cleaning up...')
+                    return
 
-            self.log.info(f"Task completed (SID: {task.sid})")
+            json_path, status = json.loads(self.done_fifo.readline().strip())
+            self.status = status
+
+            self.log.info(f"Task completed (SID: {self.task.sid})")
             if self.status == STATUSES.RESULT_FOUND:
-                self.handle_task_result(json_path, task)
+                self.handle_task_result(json_path, self.task)
             elif self.status == STATUSES.ERROR_FOUND:
-                self.handle_task_error(json_path, task)
+                self.handle_task_error(json_path, self.task)
 
             # Cleanup contents of 'received' and 'completed' directory
             self.cleanup_working_directory(self.received_dir)
@@ -270,10 +248,17 @@ class TaskHandler(ServerBase):
         if not os.path.isdir(self.completed_dir):
             os.makedirs(self.completed_dir)
 
-        # Start the file watcher for the completed folder
-        self.file_watcher = FileWatcher(self.queue, self.completed_dir, self.log)
-        self.file_watcher.start()
-        self.log.info(f"Started watching folder for result/error: {self.completed_dir}")
+        # Start task receiving fifo
+        self.log.info('Waiting for receive task named pipe to be ready...')
+        while not os.path.exists(TASK_FIFO_PATH):
+            time.sleep(1)
+        self.task_fifo = open(TASK_FIFO_PATH, "w")
+
+        # Start task completing fifo
+        self.log.info('Waiting for complete task named pipe to be ready...')
+        while not os.path.exists(DONE_FIFO_PATH):
+            time.sleep(1)
+        self.done_fifo = open(DONE_FIFO_PATH, "r")
 
     def get_task(self) -> ServiceTask:
         self.status = STATUSES.WAITING_FOR_TASK
@@ -353,7 +338,7 @@ class TaskHandler(ServerBase):
                 r = self.request_with_retries('post', self._path('task'), json=data)
 
     def handle_task_error(self, error_json_path: str, task: ServiceTask):
-        if error_json_path is None:
+        if not error_json_path:
             error = Error(dict(
                 created='NOW',
                 expiry_ts=now_as_iso(task.ttl * 24 * 60 * 60),
@@ -371,12 +356,12 @@ class TaskHandler(ServerBase):
                 error = Error(json.load(f))
 
         data = dict(task=task.as_primitives(), error=error)
-        r = self.request_with_retries('post', self._path('task'), json=data)
+        self.request_with_retries('post', self._path('task'), json=data)
 
     def stop(self):
-        if self.file_watcher:
-            self.file_watcher.stop()
-            self.log.info(f"Stopped watching folder for result/error: {self.completed_dir}")
+        self.log.info("Closing named pipes...")
+        self.done_fifo.close()
+        self.task_fifo.close()
 
         if self.status == STATUSES.WAITING_FOR_TASK:
             # A task request was sent and a task might be received, so shutdown after giving service time to process it
