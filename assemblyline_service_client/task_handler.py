@@ -305,7 +305,7 @@ class TaskHandler(ServerBase):
         # Map of file info by SHA256
         result_files = {}
         for file in result['response']['extracted'] + result['response']['supplementary']:
-            result_files[file['sha256']] = file
+            result_files[file['sha256']] = copy.deepcopy(file)
             file.pop('path', None)
 
         data = dict(task=task.as_primitives(), result=result)
