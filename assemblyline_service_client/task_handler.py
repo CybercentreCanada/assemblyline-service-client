@@ -6,18 +6,18 @@ import shutil
 import signal
 import tempfile
 import time
+from typing import Optional
+
 import requests
 import yaml
-
-from typing import Optional
 
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.isotime import now_as_iso
 from assemblyline.common.str_utils import StringTable
+from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.error import Error
 from assemblyline.odm.models.service import Service
 from assemblyline_core.server_base import ServerBase
-from assemblyline.odm.messages.task import Task as ServiceTask
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
@@ -64,8 +64,6 @@ class TaskHandler(ServerBase):
         self.session = None
         self.headers = None
 
-        self.received_dir = None
-        self.completed_dir = None
         self.task = None
 
     def _path(self, prefix, *args):
@@ -138,13 +136,14 @@ class TaskHandler(ServerBase):
     def cleanup_working_directory(folder_path):
         for file in os.listdir(folder_path):
             file_path = os.path.join(folder_path, file)
-            try:
-                if os.path.isfile(file_path):
-                    os.unlink(file_path)
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-            except Exception:
-                pass
+            if file_path != TASK_FIFO_PATH or file_path != DONE_FIFO_PATH:
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception:
+                    pass
 
     def request_with_retries(self, method: str, url: str, **kwargs):
         if 'headers' in kwargs:
@@ -196,7 +195,8 @@ class TaskHandler(ServerBase):
                     continue
 
             # Save task as JSON, so that run_service can start processing task
-            task_json_path = os.path.join(self.received_dir, f'{self.task.fileinfo.sha256}_task.json')
+            task_json_path = os.path.join(tempfile.gettempdir(),
+                                          f'{self.task.sid}_{self.task.fileinfo.sha256}_task.json')
             with open(task_json_path, 'w') as f:
                 json.dump(self.task.as_primitives(), f)
             self.log.info(f"Saved task to: {task_json_path}")
@@ -225,9 +225,8 @@ class TaskHandler(ServerBase):
             elif self.status == STATUSES.ERROR_FOUND:
                 self.handle_task_error(json_path, self.task)
 
-            # Cleanup contents of 'received' and 'completed' directory
-            self.cleanup_working_directory(self.received_dir)
-            self.cleanup_working_directory(self.completed_dir)
+            # Cleanup contents of tempdir which contains task json, result json, and working directory of service
+            self.cleanup_working_directory(tempfile.gettempdir())
 
     def initialize_service(self):
         self.status = STATUSES.INITIALIZING
@@ -237,16 +236,6 @@ class TaskHandler(ServerBase):
             self.status = STATUSES.STOPPING
             self.stop()
             return
-
-        # Set and create the directory for the output of completed tasks
-        self.received_dir = os.path.join(tempfile.gettempdir(), self.service.name.lower(), 'received')
-        if not os.path.isdir(self.received_dir):
-            os.makedirs(self.received_dir)
-
-        # Set and create the directory for the output of completed tasks
-        self.completed_dir = os.path.join(tempfile.gettempdir(), self.service.name.lower(), 'completed')
-        if not os.path.isdir(self.completed_dir):
-            os.makedirs(self.completed_dir)
 
         # Start task receiving fifo
         self.log.info('Waiting for receive task named pipe to be ready...')
@@ -292,7 +281,7 @@ class TaskHandler(ServerBase):
                 self.log.error(f"Requested file not found in the system ({sha256})")
                 return None
             else:
-                file_path = os.path.join(self.received_dir, sha256)
+                file_path = os.path.join(tempfile.gettempdir(), sha256)
                 with open(file_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=1024):
                         if chunk:  # filter out keep-alive new chunks
@@ -314,8 +303,10 @@ class TaskHandler(ServerBase):
             result = json.load(f)
 
         # Map of file info by SHA256
-        result_files = {file['sha256']: file for file in
-                        result['response']['extracted'] + result['response']['supplementary']}
+        result_files = {}
+        for file in result['response']['extracted'] + result['response']['supplementary']:
+            result_files[file['sha256']] = file
+            file.pop('path', None)
 
         data = dict(task=task.as_primitives(), result=result)
         r = self.request_with_retries('post', self._path('task'), json=data)
@@ -329,10 +320,10 @@ class TaskHandler(ServerBase):
                         ttl=str(task.ttl),
                     )
 
-                    files = dict(file=open(os.path.join(self.completed_dir, file_info['name']), 'rb'))
+                    files = dict(file=open(file_info['path'], 'rb'))
 
                     # Upload the file requested by service server
-                    self.log.info(f"Uploading file (Name: {file_info['name']}, SHA256: {file_info['sha256']})")
+                    self.log.info(f"Uploading file (Path: {file_info['path']}, SHA256: {file_info['sha256']})")
                     self.request_with_retries('put', self._path('file'), files=files, headers=headers)
 
                 r = self.request_with_retries('post', self._path('task'), json=data)
