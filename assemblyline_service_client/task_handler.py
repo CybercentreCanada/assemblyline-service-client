@@ -346,7 +346,7 @@ class TaskHandler(ServerBase):
             with open(error_json_path, 'r') as f:
                 error = Error(json.load(f))
 
-        data = dict(task=task.as_primitives(), error=error)
+        data = dict(task=task.as_primitives(), error=error.as_primitives())
         self.request_with_retries('post', self._path('task'), json=data)
 
     def stop(self):
