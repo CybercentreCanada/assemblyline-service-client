@@ -37,6 +37,10 @@ TASK_REQUEST_TIMEOUT = 30
 TASK_FIFO_PATH = "/tmp/task.fifo"
 DONE_FIFO_PATH = "/tmp/done.fifo"
 
+# The number of tasks a service will complete before stopping, letting the environment start a new container.
+# By default there is no limit, but this lets the orchestration environment set one
+TASK_COMPLETE_LIMIT = os.environ.get('AL_SERVICE_TASK_LIMIT', float('inf'))
+
 
 class ServiceServerException(Exception):
     pass
@@ -52,6 +56,7 @@ class TaskHandler(ServerBase):
         self.wait_start = None
         self.task_fifo = None
         self.done_fifo = None
+        self.tasks_processed = 0
 
         self.service = None
         self.service_manifest_data = None
@@ -181,7 +186,7 @@ class TaskHandler(ServerBase):
     def try_run(self):
         self.initialize_service()
 
-        while self.running:
+        while self.running and self.tasks_processed < TASK_COMPLETE_LIMIT:
             self.task = self.get_task()
             if not self.task:
                 continue
@@ -220,6 +225,7 @@ class TaskHandler(ServerBase):
             self.status = status
 
             self.log.info(f"Task completed (SID: {self.task.sid})")
+            self.tasks_processed += 1
             if self.status == STATUSES.RESULT_FOUND:
                 self.handle_task_result(json_path, self.task)
             elif self.status == STATUSES.ERROR_FOUND:
