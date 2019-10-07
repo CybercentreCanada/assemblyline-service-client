@@ -136,6 +136,16 @@ class TaskHandler(ServerBase):
                 self.log.info(f"SERVICE: {self.service.name}")
                 self.log.info(f"HEURISTICS_COUNT: {len(self.service_heuristics)}")
 
+    def update_service_manifest(self, data):
+        if os.path.exists(self.service_manifest_yml):
+            with open(self.service_manifest_yml, 'r') as yml_fh:
+                self.service_manifest_data = yaml.safe_load(yml_fh)
+
+                self.service_manifest_data.update(data)
+
+            with open(self.service_manifest_yml, 'w') as yml_fh:
+                yaml.safe_dump(self.service_manifest_data, yml_fh)
+
     # noinspection PyBroadException
     @staticmethod
     def cleanup_working_directory(folder_path):
@@ -242,6 +252,10 @@ class TaskHandler(ServerBase):
             self.status = STATUSES.STOPPING
             self.stop()
             return
+
+        # Update service manifest with data received from service server
+        self.log.info(f"SERVICE_CONFIG::{r['service_config']}")
+        self.update_service_manifest(r['service_config'])
 
         # Start task receiving fifo
         self.log.info('Waiting for receive task named pipe to be ready...')
