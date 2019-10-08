@@ -254,7 +254,6 @@ class TaskHandler(ServerBase):
             return
 
         # Update service manifest with data received from service server
-        self.log.info(f"SERVICE_CONFIG::{r['service_config']}")
         self.update_service_manifest(r['service_config'])
 
         # Start task receiving fifo
