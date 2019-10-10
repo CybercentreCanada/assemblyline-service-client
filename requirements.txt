@@ -1,3 +1,2 @@
 assemblyline-core
-watchdog
 python-socketio

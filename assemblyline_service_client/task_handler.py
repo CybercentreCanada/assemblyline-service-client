@@ -137,6 +137,9 @@ class TaskHandler(ServerBase):
                 self.log.info(f"HEURISTICS_COUNT: {len(self.service_heuristics)}")
 
     def update_service_manifest(self, data):
+        for x in ['version']:
+            data.pop(x, None)
+
         if os.path.exists(self.service_manifest_yml):
             with open(self.service_manifest_yml, 'r') as yml_fh:
                 self.service_manifest_data = yaml.safe_load(yml_fh)

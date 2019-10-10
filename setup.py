@@ -32,7 +32,6 @@ setup(
         'assemblyline',
         'assemblyline-core',
         'python-socketio',
-        'watchdog',
     ],
     package_data={
     }
