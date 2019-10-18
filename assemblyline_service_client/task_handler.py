@@ -358,7 +358,7 @@ class TaskHandler(ServerBase):
                 response=dict(
                     message="The service instance processing this task has terminated unexpectedly.",
                     service_name=task.service_name,
-                    service_version=' ',
+                    service_version='0',
                     status='FAIL_NONRECOVERABLE',
                 ),
                 sha256=task.fileinfo.sha256,
