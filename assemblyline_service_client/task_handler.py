@@ -33,13 +33,13 @@ STATUSES = StringTable('STATUSES', [
 SHUTDOWN_SECONDS_LIMIT = 10
 DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
 SUPPORTED_API = 'v1'
-TASK_REQUEST_TIMEOUT = 30
+TASK_REQUEST_TIMEOUT = float(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
 TASK_FIFO_PATH = "/tmp/task.fifo"
 DONE_FIFO_PATH = "/tmp/done.fifo"
 
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
 # By default there is no limit, but this lets the orchestration environment set one
-TASK_COMPLETE_LIMIT = os.environ.get('AL_SERVICE_TASK_LIMIT', float('inf'))
+TASK_COMPLETE_LIMIT = float(os.environ.get('AL_SERVICE_TASK_LIMIT', 'inf'))
 
 
 class ServiceServerException(Exception):
