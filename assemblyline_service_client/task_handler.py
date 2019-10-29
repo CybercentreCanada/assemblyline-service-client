@@ -352,9 +352,13 @@ class TaskHandler(ServerBase):
 
     def handle_task_error(self, error_json_path: str, task: ServiceTask):
         if not error_json_path:
+            # TODO: how do I get days_until_archive here??
+            days_until_archive = 5
+
             error = Error(dict(
+                archive_ts=now_as_iso(days_until_archive * 24 * 60 * 60),
                 created='NOW',
-                expiry_ts=now_as_iso(task.ttl * 24 * 60 * 60),
+                expiry_ts=now_as_iso(task.ttl * 24 * 60 * 60) if task.ttl else None,
                 response=dict(
                     message="The service instance processing this task has terminated unexpectedly.",
                     service_name=task.service_name,
