@@ -12,10 +12,8 @@ import requests
 import yaml
 
 from assemblyline.common.digests import get_sha256_for_file
-from assemblyline.common.isotime import now_as_iso
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task as ServiceTask
-from assemblyline.odm.models.error import Error
 from assemblyline.odm.models.service import Service
 from assemblyline_core.server_base import ServerBase
 
@@ -352,13 +350,7 @@ class TaskHandler(ServerBase):
 
     def handle_task_error(self, error_json_path: str, task: ServiceTask):
         if not error_json_path:
-            # TODO: how do I get days_until_archive here??
-            days_until_archive = 5
-
-            error = Error(dict(
-                archive_ts=now_as_iso(days_until_archive * 24 * 60 * 60),
-                created='NOW',
-                expiry_ts=now_as_iso(task.ttl * 24 * 60 * 60) if task.ttl else None,
+            error = dict(
                 response=dict(
                     message="The service instance processing this task has terminated unexpectedly.",
                     service_name=task.service_name,
@@ -367,12 +359,12 @@ class TaskHandler(ServerBase):
                 ),
                 sha256=task.fileinfo.sha256,
                 type='UNKNOWN',
-            ))
+            )
         else:
             with open(error_json_path, 'r') as f:
-                error = Error(json.load(f))
+                error = json.load(f)
 
-        data = dict(task=task.as_primitives(), error=error.as_primitives())
+        data = dict(task=task.as_primitives(), error=error)
         self.request_with_retries('post', self._path('task'), json=data)
 
     def stop(self):
