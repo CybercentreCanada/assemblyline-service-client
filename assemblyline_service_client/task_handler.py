@@ -31,7 +31,7 @@ STATUSES = StringTable('STATUSES', [
 SHUTDOWN_SECONDS_LIMIT = 10
 DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
 SUPPORTED_API = 'v1'
-TASK_REQUEST_TIMEOUT = float(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
+TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
 TASK_FIFO_PATH = "/tmp/task.fifo"
 DONE_FIFO_PATH = "/tmp/done.fifo"
 
