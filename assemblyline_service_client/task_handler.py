@@ -165,7 +165,7 @@ class TaskHandler(ServerBase):
         if 'headers' in kwargs:
             self.session.headers.update(kwargs['headers'])
             kwargs.pop('headers')
-        header_dump = '; '.join(k + '=' + v for k, v in self.session.headers.items())
+        header_dump = '; '.join(f"{k}={v}" for k, v in self.session.headers.items())
         self.log.debug('query headers: ' + header_dump)
 
         back_off_time = 1
