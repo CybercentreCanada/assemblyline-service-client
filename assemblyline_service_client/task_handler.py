@@ -45,12 +45,14 @@ class ServiceServerException(Exception):
 
 
 class TaskHandler(ServerBase):
-    def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT, api_host=None, api_key=None, container_id=None):
+    def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT, api_host=None, api_key=None,
+                 container_id=None, register_only=False):
         super().__init__('assemblyline.service.task_handler', shutdown_timeout=shutdown_timeout)
 
         self.service_manifest_yml = os.path.join(tempfile.gettempdir(), 'service_manifest.yml')
 
         self.status = None
+        self.register_only = register_only
         self.wait_start = None
         self.task_fifo = None
         self.done_fifo = None
@@ -250,7 +252,7 @@ class TaskHandler(ServerBase):
     def initialize_service(self):
         self.status = STATUSES.INITIALIZING
         r = self.request_with_retries('put', self._path('service', 'register'), json=self.service_manifest_data)
-        if not r['keep_alive']:
+        if not r['keep_alive'] or self.register_only:
             self.log.info(f"Service registered with {len(r['new_heuristics'])} heuristics. Now stopping...")
             self.status = STATUSES.STOPPING
             self.stop()
@@ -390,4 +392,6 @@ class TaskHandler(ServerBase):
 
 
 if __name__ == '__main__':
-    TaskHandler().serve_forever()
+    import sys
+    register_arg = '--register' in sys.argv or os.environ.get('REGISTER_ONLY', False)
+    TaskHandler(register_only=register_arg).serve_forever()
