@@ -393,5 +393,6 @@ class TaskHandler(ServerBase):
 
 if __name__ == '__main__':
     import sys
-    register_arg = '--register' in sys.argv or os.environ.get('REGISTER_ONLY', False)
+    register_arg = os.environ.get('REGISTER_ONLY', 'False').lower() == 'true'
+    register_arg |= '--register' in sys.argv
     TaskHandler(register_only=register_arg).serve_forever()
