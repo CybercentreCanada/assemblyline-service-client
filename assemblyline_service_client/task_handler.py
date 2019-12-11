@@ -186,18 +186,18 @@ class TaskHandler(ServerBase):
 
                 return resp.json()['api_response']
             except requests.ConnectionError:
+                self.log.warning(f"Cannot reach service server. Retrying after {back_off_time}s.")
                 time.sleep(back_off_time)
-                self.log.exception(f"ConnectionError. Retrying after {back_off_time}s.")
             except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
                 time.sleep(back_off_time)
             except requests.HTTPError as e:
-                self.log.exception(str(e))
+                self.log.error(str(e))
                 raise
             except requests.exceptions.RequestException as e:  # All other types of exceptions
-                self.log.exception(str(e))
+                self.log.error(str(e))
                 raise
 
-            back_off_time = min(back_off_time*2, 30)
+            back_off_time = min(back_off_time*2, 8)
 
     def try_run(self):
         self.initialize_service()
@@ -224,22 +224,30 @@ class TaskHandler(ServerBase):
 
             self.status = STATUSES.PROCESSING
 
-            # Send tasking message to run_service
-            self.task_fifo.write(f"{task_json_path}\n")
-            self.task_fifo.flush()
-
-            while True:
-                try:
-                    read_ready, _, _ = select.select([self.done_fifo], [], [], 1)
-                    if read_ready:
-                        break
-                except ValueError:
-                    self.log.info('Done fifo is closed. Cleaning up...')
-                    return
-
             try:
-                json_path, status = json.loads(self.done_fifo.readline().strip())
-            except JSONDecodeError:
+                # Send tasking message to run_service
+                self.task_fifo.write(f"{task_json_path}\n")
+                self.task_fifo.flush()
+
+                while True:
+                    try:
+                        read_ready, _, _ = select.select([self.done_fifo], [], [], 1)
+                        if read_ready:
+                            break
+                    except ValueError:
+                        self.log.info('Done fifo is closed. Cleaning up...')
+                        return
+
+                try:
+                    json_path, status = json.loads(self.done_fifo.readline().strip())
+                except JSONDecodeError:
+                    self.log.error("Done pipe received an invalid message. Marking task as failed recoverable...")
+                    status = STATUSES.ERROR_FOUND
+                    json_path = None
+            except BrokenPipeError:
+                self.task_fifo = None
+                self.done_fifo = None
+                self.log.error("One of the pipe to the service is broken. Marking task as failed recoverable...")
                 status = STATUSES.ERROR_FOUND
                 json_path = None
 
@@ -255,6 +263,22 @@ class TaskHandler(ServerBase):
             # Cleanup contents of tempdir which contains task json, result json, and working directory of service
             self.cleanup_working_directory(tempfile.gettempdir())
 
+            if self.done_fifo is None or self.task_fifo is None:
+                self.connect_pipes()
+
+    def connect_pipes(self):
+        # Start task receiving fifo
+        self.log.info('Waiting for receive task named pipe to be ready...')
+        while not os.path.exists(TASK_FIFO_PATH):
+            time.sleep(1)
+        self.task_fifo = open(TASK_FIFO_PATH, "w")
+
+        # Start task completing fifo
+        self.log.info('Waiting for complete task named pipe to be ready...')
+        while not os.path.exists(DONE_FIFO_PATH):
+            time.sleep(1)
+        self.done_fifo = open(DONE_FIFO_PATH, "r")
+
     def initialize_service(self):
         self.status = STATUSES.INITIALIZING
         r = self.request_with_retries('put', self._path('service', 'register'), json=self.service_manifest_data)
@@ -267,17 +291,8 @@ class TaskHandler(ServerBase):
         # Update service manifest with data received from service server
         self.update_service_manifest(r['service_config'])
 
-        # Start task receiving fifo
-        self.log.info('Waiting for receive task named pipe to be ready...')
-        while not os.path.exists(TASK_FIFO_PATH):
-            time.sleep(1)
-        self.task_fifo = open(TASK_FIFO_PATH, "w")
-
-        # Start task completing fifo
-        self.log.info('Waiting for complete task named pipe to be ready...')
-        while not os.path.exists(DONE_FIFO_PATH):
-            time.sleep(1)
-        self.done_fifo = open(DONE_FIFO_PATH, "r")
+        # Connect to the different name pipes
+        self.connect_pipes()
 
     def get_task(self) -> ServiceTask:
         self.status = STATUSES.WAITING_FOR_TASK
@@ -383,9 +398,15 @@ class TaskHandler(ServerBase):
     def stop(self):
         self.log.info("Closing named pipes...")
         if self.done_fifo is not None:
-            self.done_fifo.close()
+            try:
+                self.done_fifo.close()
+            except BrokenPipeError:
+                pass
         if self.task_fifo is not None:
-            self.task_fifo.close()
+            try:
+                self.task_fifo.close()
+            except BrokenPipeError:
+                pass
 
         if self.status == STATUSES.WAITING_FOR_TASK:
             # A task request was sent and a task might be received, so shutdown after giving service time to process it
