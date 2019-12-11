@@ -6,6 +6,7 @@ import shutil
 import signal
 import tempfile
 import time
+from json import JSONDecodeError
 from typing import Optional
 
 import requests
@@ -236,7 +237,12 @@ class TaskHandler(ServerBase):
                     self.log.info('Done fifo is closed. Cleaning up...')
                     return
 
-            json_path, status = json.loads(self.done_fifo.readline().strip())
+            try:
+                json_path, status = json.loads(self.done_fifo.readline().strip())
+            except JSONDecodeError:
+                status = STATUSES.ERROR_FOUND
+                json_path = None
+
             self.status = status
 
             self.log.info(f"Task completed (SID: {self.task.sid})")
@@ -352,21 +358,24 @@ class TaskHandler(ServerBase):
 
                 r = self.request_with_retries('post', self._path('task'), json=data)
 
-    def handle_task_error(self, error_json_path: str, task: ServiceTask):
-        if not error_json_path:
-            error = dict(
-                response=dict(
-                    message="The service instance processing this task has terminated unexpectedly.",
-                    service_name=task.service_name,
-                    service_version='0',
-                    status='FAIL_NONRECOVERABLE',
-                ),
-                sha256=task.fileinfo.sha256,
-                type='UNKNOWN',
-            )
-        else:
-            with open(error_json_path, 'r') as f:
-                error = json.load(f)
+    def handle_task_error(self, error_json_path: Optional[str], task: ServiceTask):
+        error = dict(
+            response=dict(
+                message="The service instance processing this task has terminated unexpectedly.",
+                service_name=task.service_name,
+                service_version='0',
+                status='FAIL_RECOVERABLE',
+            ),
+            sha256=task.fileinfo.sha256,
+            type='UNKNOWN',
+        )
+
+        if error_json_path:
+            try:
+                with open(error_json_path, 'r') as f:
+                    error = json.load(f)
+            except (IOError, JSONDecodeError, OSError):
+                self.log.exception("An error occurred while loading service error file.")
 
         data = dict(task=task.as_primitives(), error=error)
         self.request_with_retries('post', self._path('task'), json=data)
