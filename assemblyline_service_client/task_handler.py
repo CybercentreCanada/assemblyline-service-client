@@ -254,7 +254,6 @@ class TaskHandler(ServerBase):
             self.log.info(f"Task completed (SID: {self.task.sid})")
             self.tasks_processed += 1
             if self.status == STATUSES.RESULT_FOUND:
-                self.log.info(f"Result json path received by task handler: {json_path}")
                 self.handle_task_result(json_path, self.task)
             elif self.status == STATUSES.ERROR_FOUND:
                 self.handle_task_error(json_path, self.task)
@@ -346,8 +345,6 @@ class TaskHandler(ServerBase):
         with open(result_json_path, 'r') as f:
             result = json.load(f)
 
-        self.log.info(f"Raw result in task handler: {str(result)}")
-
         # Map of file info by SHA256
         result_files = {}
         for file in result['response']['extracted'] + result['response']['supplementary']:
@@ -355,7 +352,6 @@ class TaskHandler(ServerBase):
             file.pop('path', None)
 
         data = dict(task=task.as_primitives(), result=result)
-        self.log.info(f"Raw data sent to API: {str(data)}")
         r = self.request_with_retries('post', self._path('task'), json=data)
         if not r['success'] and r['missing_files']:
             while not r['success'] and r['missing_files']:
