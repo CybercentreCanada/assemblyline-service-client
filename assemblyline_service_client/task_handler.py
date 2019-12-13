@@ -239,19 +239,17 @@ class TaskHandler(ServerBase):
                         return
 
                 try:
-                    json_path, status = json.loads(self.done_fifo.readline().strip())
+                    json_path, self.status = json.loads(self.done_fifo.readline().strip())
                 except JSONDecodeError:
                     self.log.error("Done pipe received an invalid message. Marking task as failed recoverable...")
-                    status = STATUSES.ERROR_FOUND
+                    self.status = STATUSES.ERROR_FOUND
                     json_path = None
             except BrokenPipeError:
                 self.task_fifo = None
                 self.done_fifo = None
                 self.log.error("One of the pipe to the service is broken. Marking task as failed recoverable...")
-                status = STATUSES.ERROR_FOUND
+                self.status = STATUSES.ERROR_FOUND
                 json_path = None
-
-            self.status = status
 
             self.log.info(f"Task completed (SID: {self.task.sid})")
             self.tasks_processed += 1
