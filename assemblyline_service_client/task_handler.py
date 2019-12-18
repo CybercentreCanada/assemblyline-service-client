@@ -114,7 +114,7 @@ class TaskHandler(ServerBase):
 
     def load_service_manifest(self):
         # Load from the service manifest yaml
-        while not self.service:
+        while self.running and not self.service:
             if os.path.exists(self.service_manifest_yml):
                 with open(self.service_manifest_yml, 'r') as yml_fh:
                     self.service_manifest_data = yaml.safe_load(yml_fh)
@@ -173,7 +173,7 @@ class TaskHandler(ServerBase):
 
         back_off_time = 1
 
-        while True:
+        while self.running:
             try:
                 func = getattr(self.session, method)
                 resp = func(url, **kwargs)
@@ -238,6 +238,9 @@ class TaskHandler(ServerBase):
                         self.log.info('Done fifo is closed. Cleaning up...')
                         return
 
+                    if not self.running:
+                        return
+
                 try:
                     json_path, self.status = json.loads(self.done_fifo.readline().strip())
                 except JSONDecodeError:
@@ -268,12 +271,16 @@ class TaskHandler(ServerBase):
         # Start task receiving fifo
         self.log.info('Waiting for receive task named pipe to be ready...')
         while not os.path.exists(TASK_FIFO_PATH):
+            if not self.running:
+                return
             time.sleep(1)
         self.task_fifo = open(TASK_FIFO_PATH, "w")
 
         # Start task completing fifo
         self.log.info('Waiting for complete task named pipe to be ready...')
         while not os.path.exists(DONE_FIFO_PATH):
+            if not self.running:
+                return
             time.sleep(1)
         self.done_fifo = open(DONE_FIFO_PATH, "r")
 
@@ -394,18 +401,6 @@ class TaskHandler(ServerBase):
         self.request_with_retries('post', self._path('task'), json=data)
 
     def stop(self):
-        self.log.info("Closing named pipes...")
-        if self.done_fifo is not None:
-            try:
-                self.done_fifo.close()
-            except BrokenPipeError:
-                pass
-        if self.task_fifo is not None:
-            try:
-                self.task_fifo.close()
-            except BrokenPipeError:
-                pass
-
         if self.status == STATUSES.WAITING_FOR_TASK:
             # A task request was sent and a task might be received, so shutdown after giving service time to process it
             self._shutdown_timeout = TASK_REQUEST_TIMEOUT + self.service.timeout
@@ -417,6 +412,18 @@ class TaskHandler(ServerBase):
             self._shutdown_timeout = SHUTDOWN_SECONDS_LIMIT
 
         super().stop()
+
+        self.log.info("Closing named pipes...")
+        if self.done_fifo is not None:
+            try:
+                self.done_fifo.close()
+            except BrokenPipeError:
+                pass
+        if self.task_fifo is not None:
+            try:
+                self.task_fifo.close()
+            except BrokenPipeError:
+                pass
 
 
 if __name__ == '__main__':
