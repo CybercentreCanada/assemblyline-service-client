@@ -173,7 +173,7 @@ class TaskHandler(ServerBase):
 
         back_off_time = 1
 
-        while self.running:
+        while True:
             try:
                 func = getattr(self.session, method)
                 resp = func(url, **kwargs)
@@ -230,27 +230,22 @@ class TaskHandler(ServerBase):
                 self.task_fifo.flush()
 
                 while True:
-                    try:
-                        read_ready, _, _ = select.select([self.done_fifo], [], [], 1)
-                        if read_ready:
-                            break
-                    except ValueError:
-                        self.log.info('Done fifo is closed. Cleaning up...')
-                        return
-
-                    if not self.running:
-                        return
+                    read_ready, _, _ = select.select([self.done_fifo], [], [], 1)
+                    if read_ready:
+                        break
 
                 try:
                     json_path, self.status = json.loads(self.done_fifo.readline().strip())
                 except JSONDecodeError:
-                    self.log.error("Done pipe received an invalid message. Marking task as failed recoverable...")
+                    if self.running:
+                        self.log.error("Done pipe received an invalid message. Marking task as failed recoverable...")
                     self.status = STATUSES.ERROR_FOUND
                     json_path = None
-            except BrokenPipeError:
+            except (BrokenPipeError, ValueError):
                 self.task_fifo = None
                 self.done_fifo = None
-                self.log.error("One of the pipe to the service is broken. Marking task as failed recoverable...")
+                if self.running:
+                    self.log.error("One of the pipe to the service is broken. Marking task as failed recoverable...")
                 self.status = STATUSES.ERROR_FOUND
                 json_path = None
 
