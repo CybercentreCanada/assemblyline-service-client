@@ -118,6 +118,10 @@ class TaskHandler(ServerBase):
             if os.path.exists(self.service_manifest_yml):
                 with open(self.service_manifest_yml, 'r') as yml_fh:
                     self.service_manifest_data = yaml.safe_load(yml_fh)
+                    if not self.service_manifest_data:
+                        time.sleep(.1)
+                        continue
+
                     self.service_tool_version = self.service_manifest_data.get('tool_version')
                     self.file_required = self.service_manifest_data.get('file_required', True)
 
@@ -132,7 +136,7 @@ class TaskHandler(ServerBase):
                     self.service = Service(service)
 
             if not self.service:
-                time.sleep(5)
+                time.sleep(.1)
             else:
                 self.log.info(f"SERVICE: {self.service.name}")
                 self.log.info(f"HEURISTICS_COUNT: {len(self.service_heuristics)}")
