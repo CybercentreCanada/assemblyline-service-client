@@ -80,8 +80,6 @@ class TaskHandler(ServerBase):
         return os.path.join(self.service_api_host, 'api', SUPPORTED_API, prefix, *args) + '/'
 
     def start(self):
-        super().start()
-
         self.log.info("Loading service manifest...")
         if self.service_api_key == DEFAULT_API_KEY:
             key = '**default key** - You should consider setting SERVICE_API_KEY in your service containers'
@@ -105,6 +103,7 @@ class TaskHandler(ServerBase):
         self.session = requests.Session()
         self.session.headers.update(self.headers)
 
+        super().start()
         signal.signal(signal.SIGUSR1, self.handle_service_crash)
 
     # noinspection PyUnusedLocal
@@ -115,7 +114,7 @@ class TaskHandler(ServerBase):
 
     def load_service_manifest(self):
         # Load from the service manifest yaml
-        while self.running and not self.service:
+        while not self.service:
             if os.path.exists(self.service_manifest_yml):
                 with open(self.service_manifest_yml, 'r') as yml_fh:
                     self.service_manifest_data = yaml.safe_load(yml_fh)
