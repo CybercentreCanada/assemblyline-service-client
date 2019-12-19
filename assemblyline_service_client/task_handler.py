@@ -80,6 +80,8 @@ class TaskHandler(ServerBase):
         return os.path.join(self.service_api_host, 'api', SUPPORTED_API, prefix, *args) + '/'
 
     def start(self):
+        super().start()
+
         self.log.info("Loading service manifest...")
         if self.service_api_key == DEFAULT_API_KEY:
             key = '**default key** - You should consider setting SERVICE_API_KEY in your service containers'
@@ -103,7 +105,6 @@ class TaskHandler(ServerBase):
         self.session = requests.Session()
         self.session.headers.update(self.headers)
 
-        super().start()
         signal.signal(signal.SIGUSR1, self.handle_service_crash)
 
     # noinspection PyUnusedLocal
