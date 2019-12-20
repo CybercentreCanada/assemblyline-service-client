@@ -216,14 +216,12 @@ class TaskHandler(ServerBase):
             json_path = None
             file_ok = True
             if self.file_required:
-                file_path = self.download_file(self.task.fileinfo.sha256)
+                file_path = self.download_file(self.task.fileinfo.sha256, self.task.sid)
 
                 # Check if file_path was returned, meaning the file was downloaded successfully
                 if file_path is None:
                     file_ok = False
                     self.status = STATUSES.ERROR_FOUND
-                    self.log.error(f"[{self.task.sid}] Could not find file {self.task.fileinfo.sha256}. "
-                                   f"Marking task as recoverable.")
 
             if file_ok:
                 # Save task as JSON, so that run_service can start processing task
@@ -328,25 +326,25 @@ class TaskHandler(ServerBase):
         else:  # Task received
             try:
                 task = ServiceTask(r['task'])
-                self.log.info(f"Received task (SID: {task.sid})")
+                self.log.info(f"[{task.sid}] New task received")
             except ValueError as e:
                 self.log.error(f"Invalid task received: {str(e)}")
                 # TODO: return error to service server
 
         return task
 
-    def download_file(self, sha256) -> Optional[str]:
+    def download_file(self, sha256, sid) -> Optional[str]:
         self.status = STATUSES.DOWNLOADING_FILE
         received_file_sha256 = ''
         retry = 0
         file_path = None
-        self.log.info(f"Downloading file (SHA256: {sha256})")
+        self.log.info(f"[{sid}] Downloading file: {sha256}")
         while received_file_sha256 != sha256 and retry < 3:
             r = self.session.get(self._path('file', sha256), headers=self.headers)
             retry += 1
             # self.log.info(str(r.ok))
             if r.status_code == 404:
-                self.log.error(f"Requested file not found in the system ({sha256})")
+                self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
                 return None
             else:
                 file_path = os.path.join(tempfile.gettempdir(), sha256)
@@ -358,9 +356,8 @@ class TaskHandler(ServerBase):
                 received_file_sha256 = get_sha256_for_file(file_path)
 
         if received_file_sha256 != sha256:
-            self.log.error(f"File (SHA256: {sha256}) could not be downloaded after 3 tries. "
+            self.log.error(f"[{sid}] File {sha256} could not be downloaded after 3 tries. "
                            "Reporting task error to service server.")
-            # TODO: report error to service server
             return None
 
         self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
@@ -391,7 +388,7 @@ class TaskHandler(ServerBase):
                     files = dict(file=open(file_info['path'], 'rb'))
 
                     # Upload the file requested by service server
-                    self.log.info(f"Uploading file (Path: {file_info['path']}, SHA256: {file_info['sha256']})")
+                    self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
                     self.request_with_retries('put', self._path('file'), files=files, headers=headers)
 
                 r = self.request_with_retries('post', self._path('task'), json=data)
@@ -413,7 +410,7 @@ class TaskHandler(ServerBase):
                 with open(error_json_path, 'r') as f:
                     error = json.load(f)
             except (IOError, JSONDecodeError, OSError):
-                self.log.exception("An error occurred while loading service error file.")
+                self.log.exception(f"[{task.sid}] An error occurred while loading service error file.")
 
         data = dict(task=task.as_primitives(), error=error)
         self.request_with_retries('post', self._path('task'), json=data)
