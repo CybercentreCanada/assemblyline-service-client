@@ -47,13 +47,14 @@ class ServiceServerException(Exception):
 
 class TaskHandler(ServerBase):
     def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT, api_host=None, api_key=None,
-                 container_id=None, register_only=False):
+                 container_id=None, register_only=False, container_mode=False):
         super().__init__('assemblyline.service.task_handler', shutdown_timeout=shutdown_timeout)
 
         self.service_manifest_yml = os.path.join(tempfile.gettempdir(), 'service_manifest.yml')
 
         self.status = None
         self.register_only = register_only
+        self.container_mode = container_mode
         self.wait_start = None
         self.task_fifo = None
         self.done_fifo = None
@@ -264,6 +265,10 @@ class TaskHandler(ServerBase):
             self.cleanup_working_directory(tempfile.gettempdir())
 
             if self.done_fifo is None or self.task_fifo is None:
+                if self.container_mode:
+                    self.stop()
+                    return
+
                 self.connect_pipes()
 
     def connect_pipes(self):
@@ -429,4 +434,6 @@ if __name__ == '__main__':
     import sys
     register_arg = os.environ.get('REGISTER_ONLY', 'False').lower() == 'true'
     register_arg |= '--register' in sys.argv
-    TaskHandler(register_only=register_arg).serve_forever()
+
+    container_mode = os.environ.get("CONTAINER_MODE", "False").lower() == 'true'
+    TaskHandler(register_only=register_arg, container_mode=container_mode).serve_forever()
