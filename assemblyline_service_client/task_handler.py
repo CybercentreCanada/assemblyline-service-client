@@ -239,14 +239,19 @@ class TaskHandler(ServerBase):
                     if read_ready:
                         break
 
+                done_msg = self.done_fifo.readline().strip()
                 try:
-                    json_path, self.status = json.loads(self.done_fifo.readline().strip())
+                    json_path, self.status = json.loads(done_msg)
                 except JSONDecodeError:
+                    # Bad message received reset pipes
+                    self.task_fifo = None
+                    self.done_fifo = None
                     if self.running:
-                        self.log.error("Done pipe received an invalid message. Marking task as failed recoverable...")
+                        self.log.error(f"Done pipe received an invalid message: {done_msg}")
                     self.status = STATUSES.ERROR_FOUND
                     json_path = None
             except (BrokenPipeError, ValueError):
+                # Pipes are broken, reset them
                 self.task_fifo = None
                 self.done_fifo = None
                 if self.running:
@@ -254,6 +259,7 @@ class TaskHandler(ServerBase):
                 self.status = STATUSES.ERROR_FOUND
                 json_path = None
 
+            # Send task result
             self.log.info(f"Task completed (SID: {self.task.sid})")
             self.tasks_processed += 1
             if self.status == STATUSES.RESULT_FOUND:
@@ -263,7 +269,9 @@ class TaskHandler(ServerBase):
 
             # Cleanup contents of tempdir which contains task json, result json, and working directory of service
             self.cleanup_working_directory(tempfile.gettempdir())
+            self.task = None
 
+            # Reconnect or quit depending on mode
             if self.done_fifo is None or self.task_fifo is None:
                 if self.container_mode:
                     self.stop()
