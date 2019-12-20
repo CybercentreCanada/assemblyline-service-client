@@ -213,58 +213,64 @@ class TaskHandler(ServerBase):
                 continue
 
             # Download file if required by service
+            json_path = None
+            file_ok = True
             if self.file_required:
                 file_path = self.download_file(self.task.fileinfo.sha256)
 
                 # Check if file_path was returned, meaning the file was downloaded successfully
                 if file_path is None:
-                    continue
+                    file_ok = False
+                    self.status = STATUSES.ERROR_FOUND
+                    self.log.error(f"[{self.task.sid}] Could not find file {self.task.fileinfo.sha256}. "
+                                   f"Marking task as recoverable.")
 
-            # Save task as JSON, so that run_service can start processing task
-            task_json_path = os.path.join(tempfile.gettempdir(),
-                                          f'{self.task.sid}_{self.task.fileinfo.sha256}_task.json')
-            with open(task_json_path, 'w') as f:
-                json.dump(self.task.as_primitives(), f)
-            self.log.info(f"Saved task to: {task_json_path}")
+            if file_ok:
+                # Save task as JSON, so that run_service can start processing task
+                task_json_path = os.path.join(tempfile.gettempdir(),
+                                              f'{self.task.sid}_{self.task.fileinfo.sha256}_task.json')
+                with open(task_json_path, 'w') as f:
+                    json.dump(self.task.as_primitives(), f)
+                self.log.info(f"[{self.task.sid}] Saved task to: {task_json_path}")
 
-            self.status = STATUSES.PROCESSING
+                self.status = STATUSES.PROCESSING
 
-            try:
-                # Send tasking message to run_service
-                self.task_fifo.write(f"{task_json_path}\n")
-                self.task_fifo.flush()
-
-                while True:
-                    read_ready, _, _ = select.select([self.done_fifo], [], [], 1)
-                    if read_ready:
-                        break
-
-                done_msg = self.done_fifo.readline().strip()
                 try:
-                    json_path, self.status = json.loads(done_msg)
-                except JSONDecodeError:
-                    # Bad message received reset pipes
+                    # Send tasking message to run_service
+                    self.task_fifo.write(f"{task_json_path}\n")
+                    self.task_fifo.flush()
+
+                    while True:
+                        read_ready, _, _ = select.select([self.done_fifo], [], [], 1)
+                        if read_ready:
+                            break
+
+                    done_msg = self.done_fifo.readline().strip()
+                    try:
+                        json_path, self.status = json.loads(done_msg)
+                    except JSONDecodeError:
+                        # Bad message received reset pipes
+                        self.task_fifo = None
+                        self.done_fifo = None
+                        if self.running:
+                            self.log.error(f"[{self.task.sid}] Done pipe received an invalid message: {done_msg}")
+                        self.status = STATUSES.ERROR_FOUND
+                except (BrokenPipeError, ValueError):
+                    # Pipes are broken, reset them
                     self.task_fifo = None
                     self.done_fifo = None
                     if self.running:
-                        self.log.error(f"Done pipe received an invalid message: {done_msg}")
+                        self.log.error(f"[{self.task.sid}] One of the pipe to the service is broken. "
+                                       f"Marking task as failed recoverable...")
                     self.status = STATUSES.ERROR_FOUND
-                    json_path = None
-            except (BrokenPipeError, ValueError):
-                # Pipes are broken, reset them
-                self.task_fifo = None
-                self.done_fifo = None
-                if self.running:
-                    self.log.error("One of the pipe to the service is broken. Marking task as failed recoverable...")
-                self.status = STATUSES.ERROR_FOUND
-                json_path = None
 
             # Send task result
-            self.log.info(f"Task completed (SID: {self.task.sid})")
             self.tasks_processed += 1
             if self.status == STATUSES.RESULT_FOUND:
+                self.log.info(f"[{self.task.sid}] Task successfully completed")
                 self.handle_task_result(json_path, self.task)
             elif self.status == STATUSES.ERROR_FOUND:
+                self.log.info(f"[{self.task.sid}] Task completed with errors")
                 self.handle_task_error(json_path, self.task)
 
             # Cleanup contents of tempdir which contains task json, result json, and working directory of service
