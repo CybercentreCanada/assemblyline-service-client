@@ -110,7 +110,8 @@ class TaskHandler(ServerBase):
     # noinspection PyUnusedLocal
     def handle_service_crash(self, signum, frame):
         """USER1 is raised when the service has crashed, this represents an unknown error."""
-        self.handle_task_error("", self.task)
+        if self.task is not None:
+            self.handle_task_error("", self.task)
         self.stop()
 
     def load_service_manifest(self):
@@ -394,6 +395,9 @@ class TaskHandler(ServerBase):
                 r = self.request_with_retries('post', self._path('task'), json=data)
 
     def handle_task_error(self, error_json_path: Optional[str], task: ServiceTask):
+        if task is None:
+            return
+
         error = dict(
             response=dict(
                 message="The service instance processing this task has terminated unexpectedly.",
