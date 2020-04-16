@@ -22,10 +22,8 @@ stages:
         python setup.py bdist_wheel
     - publish: $(System.DefaultWorkingDirectory)/dist/
       artifact: dist
-    - publish: $(System.DefaultWorkingDirectory)/pipelines/
-      artifact: pipelines
-    - publish: $(System.DefaultWorkingDirectory)/test/
-      artifact: test
+#    - publish: $(System.DefaultWorkingDirectory)/test/
+#      artifact: test
 #- stage: test
 #  jobs:
 #  - job: run_test
@@ -44,8 +42,6 @@ stages:
 #        versionSpec: '$(python.version)'
 #    - download: current
 #      artifact: dist
-#    - download: current
-#      artifact: pipelines
 #    - download: current
 #      artifact: test
 #    - script: |
