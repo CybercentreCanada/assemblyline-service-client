@@ -1,2 +1,0 @@
-assemblyline-core
-python-socketio
