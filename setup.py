@@ -37,6 +37,10 @@ setup(
         'assemblyline-core',
         'python-socketio',
     ],
-    package_data={
-    }
+    extras_require={
+        'test': [
+            'pytest'
+        ]
+    },
+    package_data={}
 )
