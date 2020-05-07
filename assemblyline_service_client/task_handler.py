@@ -374,7 +374,7 @@ class TaskHandler(ServerBase):
             result_files[file['sha256']] = copy.deepcopy(file)
             file.pop('path', None)
 
-        data = dict(task=task.as_primitives(), result=result)
+        data = dict(task=task.as_primitives(), result=result, freshen=True)
         r = self.request_with_retries('post', self._path('task'), json=data)
         if not r['success'] and r['missing_files']:
             while not r['success'] and r['missing_files']:
@@ -392,6 +392,7 @@ class TaskHandler(ServerBase):
                     self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
                     self.request_with_retries('put', self._path('file'), files=files, headers=headers)
 
+                data['freshen'] = False
                 r = self.request_with_retries('post', self._path('task'), json=data)
 
     def handle_task_error(self, error_json_path: Optional[str], task: ServiceTask):
