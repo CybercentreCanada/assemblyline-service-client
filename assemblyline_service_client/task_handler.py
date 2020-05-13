@@ -111,7 +111,7 @@ class TaskHandler(ServerBase):
     def handle_service_crash(self, signum, frame):
         """USER1 is raised when the service has crashed, this represents an unknown error."""
         if self.task is not None:
-            self.handle_task_error("", self.task)
+            self.handle_task_error(self.task)
         self.stop()
 
     def load_service_manifest(self):
@@ -270,7 +270,7 @@ class TaskHandler(ServerBase):
                 self.handle_task_result(json_path, self.task)
             elif self.status == STATUSES.ERROR_FOUND:
                 self.log.info(f"[{self.task.sid}] Task completed with errors")
-                self.handle_task_error(json_path, self.task)
+                self.handle_task_error(self.task, error_json_path=json_path)
 
             # Cleanup contents of tempdir which contains task json, result json, and working directory of service
             self.cleanup_working_directory(tempfile.gettempdir())
@@ -375,39 +375,49 @@ class TaskHandler(ServerBase):
             file.pop('path', None)
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
-        r = self.request_with_retries('post', self._path('task'), json=data)
-        if not r['success'] and r['missing_files']:
-            while not r['success'] and r['missing_files']:
-                for f_sha256 in r['missing_files']:
-                    file_info = result_files[f_sha256]
-                    headers = dict(
-                        sha256=file_info['sha256'],
-                        classification=file_info['classification'],
-                        ttl=str(task.ttl),
-                    )
+        try:
+            r = self.request_with_retries('post', self._path('task'), json=data)
 
-                    files = dict(file=open(file_info['path'], 'rb'))
+            if not r['success'] and r['missing_files']:
+                while not r['success'] and r['missing_files']:
+                    for f_sha256 in r['missing_files']:
+                        file_info = result_files[f_sha256]
+                        headers = dict(
+                            sha256=file_info['sha256'],
+                            classification=file_info['classification'],
+                            ttl=str(task.ttl),
+                        )
 
-                    # Upload the file requested by service server
-                    self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
-                    self.request_with_retries('put', self._path('file'), files=files, headers=headers)
+                        files = dict(file=open(file_info['path'], 'rb'))
 
-                data['freshen'] = False
-                r = self.request_with_retries('post', self._path('task'), json=data)
+                        # Upload the file requested by service server
+                        self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
+                        self.request_with_retries('put', self._path('file'), files=files, headers=headers)
 
-    def handle_task_error(self, error_json_path: Optional[str], task: ServiceTask):
+                    data['freshen'] = False
+                    r = self.request_with_retries('post', self._path('task'), json=data)
+        except ServiceServerException as e:
+            self.handle_task_error(task, message=str(e), error_type='EXCEPTION', status='FAIL_NONRECOVERABLE')
+
+    def handle_task_error(self, task: ServiceTask, error_json_path: Optional[str] = None,
+                          message=None, error_type=None, status=None):
         if task is None:
             return
 
+        if self.service:
+            version = self.service.version
+        else:
+            version = '0'
+
         error = dict(
             response=dict(
-                message="The service instance processing this task has terminated unexpectedly.",
+                message=message or "The service instance processing this task has terminated unexpectedly.",
                 service_name=task.service_name,
-                service_version='0',
-                status='FAIL_RECOVERABLE',
+                service_version=version,
+                status=status or 'FAIL_RECOVERABLE',
             ),
             sha256=task.fileinfo.sha256,
-            type='UNKNOWN',
+            type=error_type or 'UNKNOWN',
         )
 
         if error_json_path:
@@ -451,5 +461,5 @@ if __name__ == '__main__':
     register_arg = os.environ.get('REGISTER_ONLY', 'False').lower() == 'true'
     register_arg |= '--register' in sys.argv
 
-    container_mode = os.environ.get("CONTAINER_MODE", "False").lower() == 'true'
-    TaskHandler(register_only=register_arg, container_mode=container_mode).serve_forever()
+    ctr_mode = os.environ.get("CONTAINER_MODE", "False").lower() == 'true'
+    TaskHandler(register_only=register_arg, container_mode=ctr_mode).serve_forever()
