@@ -396,7 +396,7 @@ class TaskHandler(ServerBase):
 
                     data['freshen'] = False
                     r = self.request_with_retries('post', self._path('task'), json=data)
-        except ServiceServerException as e:
+        except (ServiceServerException, requests.HTTPError) as e:
             self.handle_task_error(task, message=str(e), error_type='EXCEPTION', status='FAIL_NONRECOVERABLE')
 
     def handle_task_error(self, task: ServiceTask, error_json_path: Optional[str] = None,
