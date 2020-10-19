@@ -1,16 +1,17 @@
 import copy
 import json
 import os
-import requests
 import select
 import shutil
 import signal
 import tempfile
 import time
-import yaml
 from enum import Enum
 from json import JSONDecodeError
 from typing import Optional
+
+import requests
+import yaml
 
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.odm.messages.task import Task as ServiceTask
@@ -27,6 +28,7 @@ class STATUSES(Enum):
     RESULT_FOUND = 5
     ERROR_FOUND = 6
     STOPPING = 7
+
 
 SHUTDOWN_SECONDS_LIMIT = 10
 DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
