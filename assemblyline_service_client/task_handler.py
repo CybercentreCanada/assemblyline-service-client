@@ -1,16 +1,17 @@
 import copy
 import json
 import os
-import requests
 import select
 import shutil
 import signal
 import tempfile
 import time
-import yaml
 from enum import Enum
 from json import JSONDecodeError
 from typing import Optional
+
+import requests
+import yaml
 
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.odm.messages.task import Task as ServiceTask
@@ -246,7 +247,8 @@ class TaskHandler(ServerBase):
                     done_msg = self.done_fifo.readline().strip()
                     try:
                         json_path, self.status = json.loads(done_msg)
-                    except JSONDecodeError:
+                        self.status = STATUSES[self.status]
+                    except (JSONDecodeError, KeyError):
                         # Bad message received reset pipes
                         self.task_fifo = None
                         self.done_fifo = None
@@ -270,6 +272,10 @@ class TaskHandler(ServerBase):
             elif self.status == STATUSES.ERROR_FOUND:
                 self.log.info(f"[{self.task.sid}] Task completed with errors")
                 self.handle_task_error(self.task, error_json_path=json_path)
+            else:
+                self.log.warning(f"Task handler in illegal state: expected {STATUSES.RESULT_FOUND} or "
+                                 f"{STATUSES.ERROR_FOUND}, but got {self.status} {type(self.status)}")
+
 
             # Cleanup contents of tempdir which contains task json, result json, and working directory of service
             self.cleanup_working_directory(tempfile.gettempdir())
