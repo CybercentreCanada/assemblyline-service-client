@@ -29,6 +29,7 @@ class STATUSES(Enum):
     ERROR_FOUND = 6
     STOPPING = 7
 
+
 SHUTDOWN_SECONDS_LIMIT = 10
 DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
 SUPPORTED_API = 'v1'
