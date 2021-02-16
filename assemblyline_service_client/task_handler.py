@@ -29,8 +29,9 @@ STATUSES = StringTable('STATUSES', [
     ('STOPPING', 7),
 ])
 
-SHUTDOWN_SECONDS_LIMIT = 10
 DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
+LOG_LEVEL = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
+SHUTDOWN_SECONDS_LIMIT = 10
 SUPPORTED_API = 'v1'
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
 
@@ -71,8 +72,9 @@ class TaskHandler(ServerBase):
         self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
         self.session = None
         self.headers = None
-
         self.task = None
+
+        self.log.setLevel(LOG_LEVEL)
 
     def _path(self, prefix, *args):
         """
