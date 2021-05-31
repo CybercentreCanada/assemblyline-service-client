@@ -183,7 +183,12 @@ class TaskHandler(ServerBase):
         retry = 0
 
         while max_retry is None or retry < max_retry:
-            back_off_time = min(2 ** (retry - 5), 8)
+            if retry:
+                time.sleep(min(2, 2 ** (retry - 7)))
+                stream = kwargs.get('files', {}).get('file', None)
+                if stream and 'seek' in dir(stream):
+                    stream.seek(0)
+
             try:
                 func = getattr(self.session, method)
                 resp = func(url, **kwargs)
@@ -199,14 +204,13 @@ class TaskHandler(ServerBase):
                 else:
                     return resp
             except requests.ConnectionError:
-                msg = f"Cannot reach service server. Retrying after {back_off_time}s."
+                msg = "Cannot reach service server..."
                 if retry < 2:
                     self.log.info(msg)
                 else:
                     self.log.warning(msg)
-                time.sleep(back_off_time)
             except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
-                time.sleep(back_off_time)
+                pass
             except requests.HTTPError as e:
                 self.log.error(str(e))
                 raise
@@ -336,7 +340,7 @@ class TaskHandler(ServerBase):
         self.log.info(f"Requesting a task with {TASK_REQUEST_TIMEOUT}s timeout...")
         r = self.request_with_retries('get', self._path('task'), headers=headers, timeout=TASK_REQUEST_TIMEOUT*2)
         if r['task'] is False:  # No task received
-            self.log.info(f"No task received")
+            self.log.info("No task received")
         else:  # Task received
             try:
                 task = ServiceTask(r['task'])
@@ -399,11 +403,10 @@ class TaskHandler(ServerBase):
                             ttl=str(task.ttl),
                         )
 
-                        files = dict(file=open(file_info['path'], 'rb'))
-
-                        # Upload the file requested by service server
-                        self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
-                        self.request_with_retries('put', self._path('file'), files=files, headers=headers)
+                        with open(file_info['path'], 'rb') as fh:
+                            # Upload the file requested by service server
+                            self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
+                            self.request_with_retries('put', self._path('file'), files=dict(file=fh), headers=headers)
 
                     data['freshen'] = False
                     r = self.request_with_retries('post', self._path('task'), json=data)
