@@ -204,11 +204,11 @@ class TaskHandler(ServerBase):
                 else:
                     return resp
             except requests.ConnectionError:
-                msg = "Cannot reach service server..."
-                if retry < 2:
-                    self.log.info(msg)
-                else:
-                    self.log.warning(msg)
+                if not retry:
+                    self.log.info("Service server is unreacheable...")
+                elif retry % 10 == 0:
+                    self.log.warning(f"Service server has been unreacheable for the past {retry} attemps. "
+                                     "Is there something wrong with it?")
             except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
                 pass
             except requests.HTTPError as e:
