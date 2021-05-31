@@ -207,7 +207,7 @@ class TaskHandler(ServerBase):
                 if not retry:
                     self.log.info("Service server is unreachable...")
                 elif retry % 10 == 0:
-                    self.log.warning(f"Service server has been unreachable for the past {retry} attemps. "
+                    self.log.warning(f"Service server has been unreachable for the past {retry} attempts. "
                                      "Is there something wrong with it?")
             except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
                 pass
