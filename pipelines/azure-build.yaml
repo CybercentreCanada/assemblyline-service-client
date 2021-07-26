@@ -19,7 +19,14 @@ stages:
       inputs: {versionSpec: 3.8}
     - script: |
         export VERSION=${BUILD_SOURCEBRANCH#"refs/tags/v"}
+        export COMMIT=`git rev-parse --verify ${BUILD_SOURCEBRANCH}`
+        export BRANCH=`git ls-remote --heads origin | grep $COMMIT | sed "s/.*\///"`
+        echo "Building $VERSION On branch $BRANCH"
+        if [[ "$VERSION" == *stable* ]] && [[ $BRANCH != "master" ]]; then exit 1; fi
+        if [[ "$VERSION" == *dev* ]] && [[ $BRANCH != "dev" ]]; then exit 1; fi
         echo $VERSION > assemblyline_service_client/VERSION
+        export VERSION=${VERSION/stable}
+        export VERSION=${VERSION/beta/b}
         sudo env "PATH=$PATH" python -m pip install --no-cache-dir -U wheel cython pip
         python setup.py bdist_wheel
     - publish: $(System.DefaultWorkingDirectory)/dist/
