@@ -390,8 +390,9 @@ class TaskHandler(ServerBase):
             file.pop('path', None)
 
         new_tool_version = result.get('response', {}).get('service_tool_version', None)
-        if new_tool_version is not None:
-            self.session.headers.update({'service_tool_version': str(new_tool_version)})
+        if new_tool_version is not None and self.service_tool_version != new_tool_version:
+            self.service_tool_version = new_tool_version
+            self.session.headers.update({'service_tool_version': self.service_tool_version})
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
