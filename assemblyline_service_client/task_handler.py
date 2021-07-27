@@ -389,6 +389,10 @@ class TaskHandler(ServerBase):
             result_files[file['sha256']] = copy.deepcopy(file)
             file.pop('path', None)
 
+        new_tool_version = result.get('response', {}).get('service_tool_version', None)
+        if new_tool_version is not None:
+            self.session.headers.update({'service_tool_version': str(new_tool_version)})
+
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
             r = self.request_with_retries('post', self._path('task'), json=data)
