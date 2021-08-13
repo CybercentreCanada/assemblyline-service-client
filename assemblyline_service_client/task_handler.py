@@ -17,7 +17,7 @@ from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.service import Service
-from assemblyline_core.server_base import ServerBase
+from assemblyline.common.server_base import ServerBase
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
