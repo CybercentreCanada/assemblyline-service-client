@@ -406,6 +406,7 @@ class TaskHandler(ServerBase):
                             sha256=file_info['sha256'],
                             classification=file_info['classification'],
                             ttl=str(task.ttl),
+                            is_section_image=str(file_info.get('is_section_image', False))
                         )
 
                         with open(file_info['path'], 'rb') as fh:
