@@ -225,7 +225,11 @@ class TaskHandler(ServerBase):
     def try_run(self):
         self.initialize_service()
 
-        while self.running and self.tasks_processed < TASK_COMPLETE_LIMIT:
+        while self.running:
+            if self.tasks_processed >= TASK_COMPLETE_LIMIT:
+                self.stop()
+                return
+
             self.task = self.get_task()
             if not self.task:
                 continue
