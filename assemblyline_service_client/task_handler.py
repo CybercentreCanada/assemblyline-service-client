@@ -74,6 +74,7 @@ class TaskHandler(ServerBase):
         self.session = None
         self.headers = None
         self.task = None
+        self.tasking_dir = os.environ.get('TASKING_DIR', tempfile.gettempdir())
 
         self.log.setLevel(LOG_LEVEL)
 
@@ -224,6 +225,8 @@ class TaskHandler(ServerBase):
 
     def try_run(self):
         self.initialize_service()
+        if not os.path.exists(self.tasking_dir):
+            os.makedirs(self.tasking_dir)
 
         while self.running:
             if self.tasks_processed >= TASK_COMPLETE_LIMIT:
@@ -247,7 +250,7 @@ class TaskHandler(ServerBase):
 
             if file_ok:
                 # Save task as JSON, so that run_service can start processing task
-                task_json_path = os.path.join(tempfile.gettempdir(),
+                task_json_path = os.path.join(self.tasking_dir,
                                               f'{self.task.sid}_{self.task.fileinfo.sha256}_task.json')
                 with open(task_json_path, 'w') as f:
                     json.dump(self.task.as_primitives(), f)
@@ -294,7 +297,7 @@ class TaskHandler(ServerBase):
                 self.handle_task_error(self.task, error_json_path=json_path)
 
             # Cleanup contents of tempdir which contains task json, result json, and working directory of service
-            self.cleanup_working_directory(tempfile.gettempdir())
+            self.cleanup_working_directory(self.tasking_dir)
             self.task = None
 
             # Reconnect or quit depending on mode
@@ -367,7 +370,7 @@ class TaskHandler(ServerBase):
                 self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
                 return None
             else:
-                file_path = os.path.join(tempfile.gettempdir(), sha256)
+                file_path = os.path.join(self.tasking_dir, sha256)
                 with open(file_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=1024):
                         if chunk:  # filter out keep-alive new chunks
