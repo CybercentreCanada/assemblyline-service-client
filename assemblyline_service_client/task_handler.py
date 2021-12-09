@@ -238,12 +238,9 @@ class TaskHandler(ServerBase):
             if not self.task:
                 continue
 
-            # Download file if required by service
+            # Download file if required by service; if file_path was returned, the file was downloaded successfully
             json_path = None
-            file_path = None
-            if self.file_required:
-                # Check if file_path was returned, meaning the file was downloaded successfully
-                file_path = self.download_file(self.task.fileinfo.sha256, self.task.sid)
+            file_path = self.download_file(self.task.fileinfo.sha256, self.task.sid) if self.file_required else None
 
             if bool(file_path):
                 # Save task as JSON, so that run_service can start processing task
