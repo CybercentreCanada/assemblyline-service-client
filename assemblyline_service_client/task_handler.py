@@ -240,6 +240,7 @@ class TaskHandler(ServerBase):
 
             # Download file if required by service
             json_path = None
+            file_path = None
             if self.file_required:
                 # Check if file_path was returned, meaning the file was downloaded successfully
                 file_path = self.download_file(self.task.fileinfo.sha256, self.task.sid)
