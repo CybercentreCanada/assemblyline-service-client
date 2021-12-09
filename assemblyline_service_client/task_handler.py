@@ -391,7 +391,7 @@ class TaskHandler(ServerBase):
                 return
             else:
                 self.log.warning(f'[{sid}] Unknown response during file retrieval: '
-                                 '{response.reason}({response.status_code})')
+                                 f'{response.reason}({response.status_code})')
                 self.status = STATUSES.ERROR_FOUND
                 return
 
