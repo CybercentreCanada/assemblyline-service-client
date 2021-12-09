@@ -28,6 +28,7 @@ STATUSES = StringTable('STATUSES', [
     ('RESULT_FOUND', 5),
     ('ERROR_FOUND', 6),
     ('STOPPING', 7),
+    ('FILE_NOT_FOUND', 8),
 ])
 
 DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
@@ -239,16 +240,11 @@ class TaskHandler(ServerBase):
 
             # Download file if required by service
             json_path = None
-            file_ok = True
             if self.file_required:
+                # Check if file_path was returned, meaning the file was downloaded successfully
                 file_path = self.download_file(self.task.fileinfo.sha256, self.task.sid)
 
-                # Check if file_path was returned, meaning the file was downloaded successfully
-                if file_path is None:
-                    file_ok = False
-                    self.status = STATUSES.ERROR_FOUND
-
-            if file_ok:
+            if bool(file_path):
                 # Save task as JSON, so that run_service can start processing task
                 task_json_path = os.path.join(self.tasking_dir,
                                               f'{self.task.sid}_{self.task.fileinfo.sha256}_task.json')
@@ -295,6 +291,9 @@ class TaskHandler(ServerBase):
             elif self.status == STATUSES.ERROR_FOUND:
                 self.log.info(f"[{self.task.sid}] Task completed with errors")
                 self.handle_task_error(self.task, error_json_path=json_path)
+            elif self.status == STATUSES.FILE_NOT_FOUND:
+                self.log.info(f"[{self.task.sid}] Task completed with errors due to missing file from filestore")
+                self.handle_task_error(self.task, status="FAIL_NONRECOVERABLE", error_type="EXCEPTION")
 
             # Cleanup contents of tempdir which contains task json, result json, and working directory of service
             self.cleanup_working_directory(self.tasking_dir)
@@ -363,28 +362,42 @@ class TaskHandler(ServerBase):
         received_file_sha256 = ''
         file_path = None
         self.log.info(f"[{sid}] Downloading file: {sha256}")
-        r = self.request_with_retries('get', self._path('file', sha256),
-                                      get_api_response=False, max_retry=3, headers=self.headers)
-        if r is not None:
-            if r.status_code == 404:
-                self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
-                return None
-            else:
+        response = self.request_with_retries('get', self._path('file', sha256),
+                                             get_api_response=False, max_retry=3, headers=self.headers)
+        if response is not None:
+            # Check if we got a 'good' response
+            if response.status_code == 200:
                 file_path = os.path.join(self.tasking_dir, sha256)
                 with open(file_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024):
+                    for chunk in response.iter_content(chunk_size=1024):
                         if chunk:  # filter out keep-alive new chunks
                             f.write(chunk)
 
                 received_file_sha256 = get_sha256_for_file(file_path)
 
-        if received_file_sha256 != sha256:
-            self.log.error(f"[{sid}] File {sha256} could not be downloaded after 3 tries. "
-                           "Reporting task error to service server.")
-            return None
+                # If the file retrieved is different from what we requested, report the error
+                if received_file_sha256 != sha256:
+                    self.log.error(f"[{sid}] Downloaded ({received_file_sha256}) doesn't match requested ({sha256})"
+                                   "Reporting task error to service server.")
+                    self.status = STATUSES.ERROR_FOUND
+                    return
 
-        self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
-        return file_path
+                # Otherwise, this should be what we asked for, therefore success!
+                self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
+                return file_path
+            elif response.status_code == 404:
+                self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
+                self.status = STATUSES.FILE_NOT_FOUND
+                return
+            else:
+                self.log.warning(f'[{sid}] Unknown response during file retrieval: '
+                                 f'{response.reason}({response.status_code})')
+                self.status = STATUSES.ERROR_FOUND
+                return
+
+        self.log.error(f"[{sid}] No response given for file {sha256}. Reporting task error to service server.")
+        self.status = STATUSES.ERROR_FOUND
+        return
 
     def handle_task_result(self, result_json_path: str, task: ServiceTask):
         with open(result_json_path, 'r') as f:
