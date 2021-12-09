@@ -366,11 +366,7 @@ class TaskHandler(ServerBase):
                                              get_api_response=False, max_retry=3, headers=self.headers)
         if response:
             # Check if we got a 'good' response
-            if response.status_code == 404:
-                self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
-                self.status = STATUSES.FILE_NOT_FOUND
-                return
-            elif response.status_code == 200:
+            if response.status_code == 200:
                 file_path = os.path.join(self.tasking_dir, sha256)
                 with open(file_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=1024):
@@ -378,17 +374,24 @@ class TaskHandler(ServerBase):
                             f.write(chunk)
 
                 received_file_sha256 = get_sha256_for_file(file_path)
+
+                # If the file retrieved is different from what we requested, report the error
                 if received_file_sha256 != sha256:
                     self.log.error(f"[{sid}] Downloaded ({received_file_sha256}) doesn't match requested ({sha256})"
                                    "Reporting task error to service server.")
                     self.status = STATUSES.ERROR_FOUND
                     return
-                else:
-                    self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
-                    return file_path
+
+                # Otherwise, this should be what we asked for, therefore success!
+                self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
+                return file_path
+            elif response.status_code == 404:
+                self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
+                self.status = STATUSES.FILE_NOT_FOUND
+                return
             else:
-                self.log.warning(
-                    f'[{sid}] Unknown response during file retrieval: {response.reason}({response.status_code})')
+                self.log.warning(f'[{sid}] Unknown response during file retrieval: '
+                                 '{response.reason}({response.status_code})')
                 self.status = STATUSES.ERROR_FOUND
                 return
 
