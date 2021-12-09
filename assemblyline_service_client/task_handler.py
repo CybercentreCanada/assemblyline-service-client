@@ -293,7 +293,7 @@ class TaskHandler(ServerBase):
                 self.handle_task_error(self.task, error_json_path=json_path)
             elif self.status == STATUSES.FILE_NOT_FOUND:
                 self.log.info(f"[{self.task.sid}] Task completed with errors due to missing file from filestore")
-                self.handle_task_error(self.task, status="FAIL_NONRECOVERABLE", error_type="FILE_NOT_FOUND")
+                self.handle_task_error(self.task, status="FAIL_NONRECOVERABLE", error_type="EXCEPTION")
 
             # Cleanup contents of tempdir which contains task json, result json, and working directory of service
             self.cleanup_working_directory(self.tasking_dir)
@@ -364,7 +364,7 @@ class TaskHandler(ServerBase):
         self.log.info(f"[{sid}] Downloading file: {sha256}")
         response = self.request_with_retries('get', self._path('file', sha256),
                                              get_api_response=False, max_retry=3, headers=self.headers)
-        if response:
+        if response is not None:
             # Check if we got a 'good' response
             if response.status_code == 200:
                 file_path = os.path.join(self.tasking_dir, sha256)
