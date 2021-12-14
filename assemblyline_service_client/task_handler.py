@@ -2,7 +2,6 @@ import copy
 import json
 import logging
 import os
-import re
 import select
 import shutil
 import signal
@@ -75,7 +74,7 @@ class TaskHandler(ServerBase):
         self.service_api_host = api_host or os.environ.get('SERVICE_API_HOST', 'http://localhost:5003')
         self.service_api_key = api_key or os.environ.get('SERVICE_API_KEY', DEFAULT_API_KEY)
         self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
-        self.request = self.request_with_retries if PRIVILEGED else self.request_directly
+        self.request = self.request_directly if PRIVILEGED else self.request_with_retries
         self.session = None
         self.headers = None
         self.task = None
@@ -100,6 +99,7 @@ class TaskHandler(ServerBase):
         self.log.info(f"SERVICE_API_HOST: {self.service_api_host}")
         self.log.info(f"SERVICE_APIKEY: {key}")
         self.log.info(f"CONTAINER-ID: {self.container_id}")
+        self.log.info(f"PRIVILEGED: {PRIVILEGED}")
         self.load_service_manifest()
         self.log.info("----------------------------")
 
@@ -183,17 +183,11 @@ class TaskHandler(ServerBase):
     def request_directly(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs):
         path = f"{method.upper()} {url}"
         self.log.debug(path)
-        for path_regex, func_tuple in client.PATH_MAPPING.items():
-            if re.match(path_regex, path):
-                func, param_regex_dict = func_tuple
-                params = {}
-                for param, regex in param_regex_dict.items():
-                    params[param] = re.findall(regex, url)[0]
-                kwargs.update(params)
-                kwargs['client_info'] = self.session.headers
-                self.log.debug(f"{func}: {kwargs}")
-                return func(**kwargs)
-        return None
+        func, params = client.request(path)
+        kwargs.update(params)
+        kwargs['client_info'] = self.session.headers
+        self.log.debug(f"{func}: {kwargs}")
+        return func(**kwargs)
 
     def request_with_retries(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs):
         if 'headers' in kwargs:
