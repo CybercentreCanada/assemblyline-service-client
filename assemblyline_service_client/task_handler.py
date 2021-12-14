@@ -18,7 +18,6 @@ from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.service import Service
 from assemblyline_core.server_base import ServerBase
-from assemblyline_core.tasking import client
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
@@ -37,7 +36,10 @@ LOG_LEVEL = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
 SHUTDOWN_SECONDS_LIMIT = 10
 SUPPORTED_API = 'v1'
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
+
 PRIVILEGED = os.environ.get('PRIVILEGED', "false").lower() == "true"
+if PRIVILEGED:
+    from assemblyline_core.tasking import client
 
 
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
