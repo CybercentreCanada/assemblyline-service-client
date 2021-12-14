@@ -2,6 +2,7 @@ import copy
 import json
 import logging
 import os
+import re
 import select
 import shutil
 import signal
@@ -18,6 +19,7 @@ from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.service import Service
 from assemblyline_core.server_base import ServerBase
+from assemblyline_core.tasking import client
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
@@ -36,6 +38,7 @@ LOG_LEVEL = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
 SHUTDOWN_SECONDS_LIMIT = 10
 SUPPORTED_API = 'v1'
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
+PRIVILEGED = os.environ.get('PRIVILEGED', "false").lower() == "true"
 
 
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
@@ -72,6 +75,7 @@ class TaskHandler(ServerBase):
         self.service_api_host = api_host or os.environ.get('SERVICE_API_HOST', 'http://localhost:5003')
         self.service_api_key = api_key or os.environ.get('SERVICE_API_KEY', DEFAULT_API_KEY)
         self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
+        self.request = self.request_with_retries if PRIVILEGED else self.request_directly
         self.session = None
         self.headers = None
         self.task = None
@@ -102,6 +106,7 @@ class TaskHandler(ServerBase):
         self.headers = dict(
             X_APIKEY=self.service_api_key,
             container_id=self.container_id,
+            client_id=self.container_id,
             service_name=self.service.name,
             service_version=self.service.version,
             service_tool_version=self.service_tool_version,
@@ -174,6 +179,21 @@ class TaskHandler(ServerBase):
                         shutil.rmtree(file_path)
                 except Exception:
                     pass
+
+    def request_directly(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs):
+        path = f"{method.upper()} {url}"
+        self.log.debug(path)
+        for path_regex, func_tuple in client.PATH_MAPPING.items():
+            if re.match(path_regex, path):
+                func, param_regex_dict = func_tuple
+                params = {}
+                for param, regex in param_regex_dict.items():
+                    params[param] = re.findall(regex, url)[0]
+                kwargs.update(params)
+                kwargs['client_info'] = self.session.headers
+                self.log.debug(f"{func}: {kwargs}")
+                return func(**kwargs)
+        return None
 
     def request_with_retries(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs):
         if 'headers' in kwargs:
@@ -325,7 +345,7 @@ class TaskHandler(ServerBase):
 
     def initialize_service(self):
         self.status = STATUSES.INITIALIZING
-        r = self.request_with_retries('put', self._path('service', 'register'), json=self.service_manifest_data)
+        r = self.request('put', self._path('service', 'register'), json=self.service_manifest_data)
         if not r['keep_alive'] or self.register_only:
             self.log.info(f"Service registered with {len(r['new_heuristics'])} heuristics. Now stopping...")
             self.status = STATUSES.STOPPING
@@ -343,7 +363,7 @@ class TaskHandler(ServerBase):
         task = None
         headers = dict(timeout=str(TASK_REQUEST_TIMEOUT))
         self.log.info(f"Requesting a task with {TASK_REQUEST_TIMEOUT}s timeout...")
-        r = self.request_with_retries('get', self._path('task'), headers=headers, timeout=TASK_REQUEST_TIMEOUT*2)
+        r = self.request('get', self._path('task'), headers=headers, timeout=TASK_REQUEST_TIMEOUT*2)
         if r['task'] is False:  # No task received
             self.log.info("No task received")
         else:  # Task received
@@ -361,14 +381,16 @@ class TaskHandler(ServerBase):
         received_file_sha256 = ''
         file_path = None
         self.log.info(f"[{sid}] Downloading file: {sha256}")
-        response = self.request_with_retries('get', self._path('file', sha256),
-                                             get_api_response=False, max_retry=3, headers=self.headers)
+        response = self.request('get', self._path('file', sha256),
+                                get_api_response=False, max_retry=3, headers=self.headers)
         if response is not None:
             # Check if we got a 'good' response
             if response.status_code == 200:
                 file_path = os.path.join(self.tasking_dir, sha256)
                 with open(file_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=1024):
+                    iter_content = response.iter_content(chunk_size=1024) if isinstance(response, requests.Response) \
+                        else response.iter_encoded()
+                    for chunk in iter_content:
                         if chunk:  # filter out keep-alive new chunks
                             f.write(chunk)
 
@@ -415,7 +437,7 @@ class TaskHandler(ServerBase):
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
-            r = self.request_with_retries('post', self._path('task'), json=data)
+            r = self.request('post', self._path('task'), json=data)
 
             if not r['success'] and r['missing_files']:
                 while not r['success'] and r['missing_files']:
@@ -431,10 +453,10 @@ class TaskHandler(ServerBase):
                         with open(file_info['path'], 'rb') as fh:
                             # Upload the file requested by service server
                             self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
-                            self.request_with_retries('put', self._path('file'), files=dict(file=fh), headers=headers)
+                            self.request('put', self._path('file'), files=dict(file=fh), headers=headers)
 
                     data['freshen'] = False
-                    r = self.request_with_retries('post', self._path('task'), json=data)
+                    r = self.request('post', self._path('task'), json=data)
         except (ServiceServerException, requests.HTTPError) as e:
             self.handle_task_error(task, message=str(e), error_type='EXCEPTION', status='FAIL_NONRECOVERABLE')
 
@@ -467,7 +489,7 @@ class TaskHandler(ServerBase):
                 self.log.exception(f"[{task.sid}] An error occurred while loading service error file.")
 
         data = dict(task=task.as_primitives(), error=error)
-        self.request_with_retries('post', self._path('task'), json=data)
+        self.request('post', self._path('task'), json=data)
 
     def stop(self):
         if self.status == STATUSES.WAITING_FOR_TASK:
