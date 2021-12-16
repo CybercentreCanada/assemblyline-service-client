@@ -15,9 +15,11 @@ import yaml
 
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
+from assemblyline.filestore import FileStoreException
 from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.service import Service
 from assemblyline_core.server_base import ServerBase
+from assemblyline_core.tasking_client import TaskingClient
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
@@ -38,8 +40,6 @@ SUPPORTED_API = 'v1'
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
 
 PRIVILEGED = os.environ.get('PRIVILEGED', "false").lower() == "true"
-if PRIVILEGED:
-    from assemblyline_core.tasking import client
 
 
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
@@ -76,10 +76,10 @@ class TaskHandler(ServerBase):
         self.service_api_host = api_host or os.environ.get('SERVICE_API_HOST', 'http://localhost:5003')
         self.service_api_key = api_key or os.environ.get('SERVICE_API_KEY', DEFAULT_API_KEY)
         self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
-        self.request = self.request_directly if PRIVILEGED else self.request_with_retries
         self.session = None
         self.headers = None
         self.task = None
+        self.tasking_client = TaskingClient() if PRIVILEGED else None
         self.tasking_dir = os.environ.get('TASKING_DIR', tempfile.gettempdir())
 
         self.log.setLevel(LOG_LEVEL)
@@ -181,15 +181,6 @@ class TaskHandler(ServerBase):
                         shutil.rmtree(file_path)
                 except Exception:
                     pass
-
-    def request_directly(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs):
-        path = f"{method.upper()} {url}"
-        self.log.debug(path)
-        func, params = client.request(path)
-        kwargs.update(params)
-        kwargs['client_info'] = self.session.headers
-        self.log.debug(f"{func}: {kwargs}")
-        return func(**kwargs)
 
     def request_with_retries(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs):
         if 'headers' in kwargs:
@@ -341,7 +332,11 @@ class TaskHandler(ServerBase):
 
     def initialize_service(self):
         self.status = STATUSES.INITIALIZING
-        r = self.request('put', self._path('service', 'register'), json=self.service_manifest_data)
+
+        r = self.tasking_client.register_service(client_info=self.headers, json=self.service_manifest_data) \
+            if PRIVILEGED else self.request_with_retries('put', self._path('service', 'register'),
+                                                         json=self.service_manifest_data)
+
         if not r['keep_alive'] or self.register_only:
             self.log.info(f"Service registered with {len(r['new_heuristics'])} heuristics. Now stopping...")
             self.status = STATUSES.STOPPING
@@ -359,7 +354,10 @@ class TaskHandler(ServerBase):
         task = None
         headers = dict(timeout=str(TASK_REQUEST_TIMEOUT))
         self.log.info(f"Requesting a task with {TASK_REQUEST_TIMEOUT}s timeout...")
-        r = self.request('get', self._path('task'), headers=headers, timeout=TASK_REQUEST_TIMEOUT*2)
+
+        r = self.tasking_client.get_task(client_info=self.headers, headers=headers) if PRIVILEGED \
+            else self.request_with_retries('get', self._path('task'), headers=headers, timeout=TASK_REQUEST_TIMEOUT*2)
+
         if r['task'] is False:  # No task received
             self.log.info("No task received")
         else:  # Task received
@@ -374,47 +372,61 @@ class TaskHandler(ServerBase):
 
     def download_file(self, sha256, sid) -> Optional[str]:
         self.status = STATUSES.DOWNLOADING_FILE
-        received_file_sha256 = ''
-        file_path = None
         self.log.info(f"[{sid}] Downloading file: {sha256}")
-        response = self.request('get', self._path('file', sha256),
-                                get_api_response=False, max_retry=3, headers=self.headers)
-        if response is not None:
-            # Check if we got a 'good' response
-            if response.status_code == 200:
-                file_path = os.path.join(self.tasking_dir, sha256)
-                with open(file_path, 'wb') as f:
-                    iter_content = response.iter_content(chunk_size=1024) if isinstance(response, requests.Response) \
-                        else response.iter_encoded()
-                    for chunk in iter_content:
-                        if chunk:  # filter out keep-alive new chunks
-                            f.write(chunk)
+        if PRIVILEGED:
+            file_path = os.path.join(self.tasking_dir, sha256)
+            try:
+                self.tasking_client.download_file(sha256=sha256, client_info=self.headers, target_path=file_path)
+                self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
+            except FileStoreException:
+                self.status = STATUSES.FILE_NOT_FOUND
+            except Exception as e:
+                self.log.error(f' Exception during file retrieval: {e}')
+                self.status = STATUSES.ERROR_FOUND
+            return file_path
 
-                received_file_sha256 = get_sha256_for_file(file_path)
+        else:
+            received_file_sha256 = ''
+            file_path = None
+            response = self.request_with_retries('get', self._path('file', sha256),
+                                                 get_api_response=False, max_retry=3, headers=self.headers)
+            if response is not None:
+                # Check if we got a 'good' response
+                if response.status_code == 200:
+                    file_path = os.path.join(self.tasking_dir, sha256)
+                    with open(file_path, 'wb') as f:
+                        iter_content = response.iter_content(
+                            chunk_size=1024) if isinstance(
+                            response, requests.Response) else response.iter_encoded()
+                        for chunk in iter_content:
+                            if chunk:  # filter out keep-alive new chunks
+                                f.write(chunk)
 
-                # If the file retrieved is different from what we requested, report the error
-                if received_file_sha256 != sha256:
-                    self.log.error(f"[{sid}] Downloaded ({received_file_sha256}) doesn't match requested ({sha256})"
-                                   "Reporting task error to service server.")
+                    received_file_sha256 = get_sha256_for_file(file_path)
+
+                    # If the file retrieved is different from what we requested, report the error
+                    if received_file_sha256 != sha256:
+                        self.log.error(f"[{sid}] Downloaded ({received_file_sha256}) doesn't match requested ({sha256})"
+                                       "Reporting task error to service server.")
+                        self.status = STATUSES.ERROR_FOUND
+                        return
+
+                    # Otherwise, this should be what we asked for, therefore success!
+                    self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
+                    return file_path
+                elif response.status_code == 404:
+                    self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
+                    self.status = STATUSES.FILE_NOT_FOUND
+                    return
+                else:
+                    self.log.warning(f'[{sid}] Unknown response during file retrieval: '
+                                     f'{response.reason}({response.status_code})')
                     self.status = STATUSES.ERROR_FOUND
                     return
 
-                # Otherwise, this should be what we asked for, therefore success!
-                self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
-                return file_path
-            elif response.status_code == 404:
-                self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
-                self.status = STATUSES.FILE_NOT_FOUND
-                return
-            else:
-                self.log.warning(f'[{sid}] Unknown response during file retrieval: '
-                                 f'{response.reason}({response.status_code})')
-                self.status = STATUSES.ERROR_FOUND
-                return
-
-        self.log.error(f"[{sid}] No response given for file {sha256}. Reporting task error to service server.")
-        self.status = STATUSES.ERROR_FOUND
-        return
+            self.log.error(f"[{sid}] No response given for file {sha256}. Reporting task error to service server.")
+            self.status = STATUSES.ERROR_FOUND
+            return
 
     def handle_task_result(self, result_json_path: str, task: ServiceTask):
         with open(result_json_path, 'r') as f:
@@ -433,9 +445,10 @@ class TaskHandler(ServerBase):
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
-            r = self.request('post', self._path('task'), json=data)
+            r = self.tasking_client.task_finished(client_info=self.headers, json=data) \
+                if PRIVILEGED else self.request_with_retries('post', self._path('task'), json=data)
 
-            if not r['success'] and r['missing_files']:
+            if r and not r['success'] and r['missing_files']:
                 while not r['success'] and r['missing_files']:
                     for f_sha256 in r['missing_files']:
                         file_info = result_files[f_sha256]
@@ -443,16 +456,21 @@ class TaskHandler(ServerBase):
                             sha256=file_info['sha256'],
                             classification=file_info['classification'],
                             ttl=str(task.ttl),
-                            is_section_image=str(file_info.get('is_section_image', False))
+                            is_section_image=str(file_info.get('is_section_image', 'false'))
                         )
 
                         with open(file_info['path'], 'rb') as fh:
                             # Upload the file requested by service server
                             self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
-                            self.request('put', self._path('file'), files=dict(file=fh), headers=headers)
-
+                            if PRIVILEGED:
+                                self.tasking_client.upload_files(client_info=self.headers, request=None,
+                                                                 direct_upload=dict(headers=headers, file=fh))
+                            else:
+                                self.request_with_retries('put', self._path('file'),  files=dict(file=fh),
+                                                          headers=headers)
                     data['freshen'] = False
-                    r = self.request('post', self._path('task'), json=data)
+                    r = self.tasking_client.task_finished(client_info=self.headers, json=data) \
+                        if PRIVILEGED else self.request_with_retries('post', self._path('task'), json=data)
         except (ServiceServerException, requests.HTTPError) as e:
             self.handle_task_error(task, message=str(e), error_type='EXCEPTION', status='FAIL_NONRECOVERABLE')
 
@@ -485,7 +503,8 @@ class TaskHandler(ServerBase):
                 self.log.exception(f"[{task.sid}] An error occurred while loading service error file.")
 
         data = dict(task=task.as_primitives(), error=error)
-        self.request('post', self._path('task'), json=data)
+        self.tasking_client.task_finished(client_info=self.headers, json=data) \
+            if PRIVILEGED else self.request_with_retries('post', self._path('task'), json=data)
 
     def stop(self):
         if self.status == STATUSES.WAITING_FOR_TASK:
