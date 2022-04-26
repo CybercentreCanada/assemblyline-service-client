@@ -348,10 +348,15 @@ class TaskHandler(ServerBase):
             self.log.info("No task received")
         else:  # Task received
             try:
-                task = ServiceTask(r['task'])
+                # Inspect task to ensure submission parameters are given, add defaults where necessary
+                params = {x.name: r['task']['service_config'].get(x.name, x.default)
+                          for x in self.service.submission_params}
+                task['service_config'] = params
+                task = ServiceTask(task)
                 self.log.info(f"[{task.sid}] New task received")
             except ValueError as e:
                 self.log.error(f"Invalid task received: {str(e)}")
+                task = None
                 # TODO: return error to service server
 
         return task
