@@ -109,6 +109,13 @@ class TaskHandler(ServerBase):
 
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        if self.service_api_host.startswith('https'):
+            # Pass in client cert/key
+            self.session.cert = (
+                os.environ.get('SERVICE_SERVER_CLIENT_CERT_PATH', '/etc/assemblyline/ssl/service-server.crt'),
+                os.environ.get('SERVICE_SERVER_CLIENT_KEY_PATH', '/etc/assemblyline/ssl/service-server.key')
+            )
+            self.session.verify = os.environ.get('SERVICE_SERVER_ROOT_CA_PATH', '/etc/assemblyline/ssl/root-ca.crt')
 
         super().start()
         signal.signal(signal.SIGUSR1, self.handle_service_crash)
