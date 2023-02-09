@@ -109,6 +109,8 @@ class TaskHandler(ServerBase):
 
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        if self.service_api_host.startswith('https'):
+            self.session.verify = os.environ.get('SERVICE_SERVER_ROOT_CA_PATH', '/etc/assemblyline/ssl/al_root-ca.crt')
 
         super().start()
         signal.signal(signal.SIGUSR1, self.handle_service_crash)
