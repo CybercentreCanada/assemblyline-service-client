@@ -1,6 +1,10 @@
 import os
+import tempfile
 
+import pytest
+import requests_mock
 from assemblyline_service_client import task_handler
+from requests import ConnectionError, HTTPError, Session, Timeout, exceptions
 
 from assemblyline.odm.models.service import Service
 
@@ -116,3 +120,130 @@ def test_load_service_manifest():
         }
     )
     assert default_th.service.__dict__ == service_object.__dict__
+
+
+def test_update_service_manifest():
+    default_th = task_handler.TaskHandler()
+    default_th.update_service_manifest({"version": "pop me!", "other": "stuff"})
+    assert default_th.service_manifest_data == {
+        'name': 'Sample',
+        'version': 'sample',
+        'docker_config': {
+            'image': 'sample'
+        },
+        'heuristics': [
+            {
+                'heur_id': 17,
+                'name': 'blah',
+                'description': 'blah',
+                'filetype': '*',
+                'score': 250
+            }
+        ],
+        'other': 'stuff'
+    }
+
+
+def test_cleanup_working_directory():
+    default_th = task_handler.TaskHandler()
+
+    temp_dir = tempfile.mkdtemp()
+    _, temp_abs_pathname = tempfile.mkstemp(dir=temp_dir)
+    with open(temp_abs_pathname, "w") as f:
+        f.write("TMP")
+    nested_temp_dir = tempfile.mkdtemp(dir=temp_dir)
+
+    default_th.cleanup_working_directory(temp_dir)
+    assert not os.path.exists(temp_abs_pathname)
+    assert not os.path.exists(nested_temp_dir)
+    assert os.path.exists(temp_dir)
+
+    # Test for task_fifo_path and done_fifo_path
+    _, temp_fifo_abs_pathname = tempfile.mkstemp(dir=temp_dir)
+    with open(temp_fifo_abs_pathname, "w") as f:
+        f.write("TMP")
+    default_th.task_fifo_path = temp_fifo_abs_pathname
+    default_th.done_fifo_path = temp_fifo_abs_pathname
+    default_th.cleanup_working_directory(temp_dir)
+
+    # Check them all, even though they are all the same, just in case
+    assert os.path.exists(temp_fifo_abs_pathname)
+    assert os.path.exists(default_th.task_fifo_path)
+    assert os.path.exists(default_th.done_fifo_path)
+
+    assert os.path.exists(temp_dir)
+
+    # Cleanup
+    os.remove(temp_fifo_abs_pathname)
+    os.removedirs(temp_dir)
+
+
+def test_request_with_retries():
+    default_th = task_handler.TaskHandler()
+    default_th.session = Session()
+    url = "http://localhost"
+
+    with requests_mock.Mocker() as m:
+        # Normal get with no api response parsing, nothing fancy
+        m.get(url)
+        assert default_th.request_with_retries("get", url, get_api_response=False)
+
+        # Some headers added
+        assert default_th.request_with_retries("get", url, get_api_response=False, headers={"blah": "blah"})
+        assert default_th.session.headers["blah"] == "blah"
+
+        # Max retry set
+        assert default_th.request_with_retries("get", url, get_api_response=False, max_retry=1)
+
+        # Connection error with max retry of 1
+        m.get(url, exc=ConnectionError)
+        assert default_th.request_with_retries("get", url, get_api_response=False, max_retry=1) is None
+
+        # Timeout error with max retry of 1
+        m.get(url, exc=Timeout)
+        assert default_th.request_with_retries("get", url, get_api_response=False, max_retry=1) is None
+
+        # HTTPError error with max retry of 1
+        m.get(url, exc=HTTPError)
+        with pytest.raises(HTTPError):
+            default_th.request_with_retries("get", url, get_api_response=False, max_retry=1) is None
+
+        # exceptions.RequestException error with max retry of 1
+        m.get(url, exc=exceptions.RequestException)
+        with pytest.raises(exceptions.RequestException):
+            default_th.request_with_retries("get", url, get_api_response=False, max_retry=1) is None
+
+        # Api response parsing with no "api_response" key
+        m.get(url, json={})
+        with pytest.raises(KeyError):
+            default_th.request_with_retries("get", url, get_api_response=True)
+
+        # Api response parsing with "api_response" key
+        m.get(url, json={"api_response": "blah"})
+        assert default_th.request_with_retries("get", url, get_api_response=True) == "blah"
+
+        # Api response parsing with status code of 400 and no "api_error_message" key
+        m.get(url, json={}, status_code=400)
+        with pytest.raises(HTTPError):
+            default_th.request_with_retries("get", url, get_api_response=True)
+
+        # Api response parsing with status code of 400 and "api_error_message" key
+        m.get(url, json={"api_error_message": "blah"}, status_code=400)
+        with pytest.raises(task_handler.ServiceServerException):
+            default_th.request_with_retries("get", url, get_api_response=True)
+
+        # Api response parsing with status code not 400
+        m.get(url, json={"api_error_message": "blah"}, status_code=401)
+        with pytest.raises(HTTPError):
+            default_th.request_with_retries("get", url, get_api_response=True)
+
+
+# def test_try_run():
+#     default_th = task_handler.TaskHandler()
+#     default_th.session = Session()
+
+#     default_th.task_fifo_path = tempfile.mkstemp()
+
+#     with requests_mock.Mocker() as m:
+#         m.put(default_th._path('service', 'register'), json={"api_response": {"keep_alive": False, "new_heuristics": []}})
+#         default_th.try_run()

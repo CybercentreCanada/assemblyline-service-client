@@ -8,16 +8,16 @@ import signal
 import tempfile
 import time
 from json import JSONDecodeError
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 import yaml
+from assemblyline_core.server_base import ServerBase
 
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.service import Service
-from assemblyline_core.server_base import ServerBase
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
@@ -79,7 +79,7 @@ class TaskHandler(ServerBase):
 
         self.log.setLevel(LOG_LEVEL)
 
-    def _path(self, prefix, *args):
+    def _path(self, prefix, *args) -> str:
         """
         Calculate the API path using the prefix as shown:
             /api/v1/<prefix>/[arg1/[arg2/[...]]][?k1=v1[...]]
@@ -168,6 +168,7 @@ class TaskHandler(ServerBase):
     def cleanup_working_directory(self, folder_path):
         for file in os.listdir(folder_path):
             file_path = os.path.join(folder_path, file)
+            # if file_path not in [self.task_fifo_path, self.done_fifo_path]:
             if file_path != self.task_fifo_path or file_path != self.done_fifo_path:
                 try:
                     if os.path.isfile(file_path):
@@ -177,7 +178,7 @@ class TaskHandler(ServerBase):
                 except Exception:
                     pass
 
-    def request_with_retries(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs):
+    def request_with_retries(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs) -> Optional[Any]:
         if 'headers' in kwargs:
             self.session.headers.update(kwargs['headers'])
             kwargs.pop('headers')
