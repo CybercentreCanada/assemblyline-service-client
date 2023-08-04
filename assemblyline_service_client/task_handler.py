@@ -383,7 +383,7 @@ class TaskHandler(ServerBase):
 
                 # If the file retrieved is different from what we requested, report the error
                 if received_file_sha256 != sha256:
-                    self.log.error(f"[{sid}] Downloaded ({received_file_sha256}) doesn't match requested ({sha256})"
+                    self.log.error(f"[{sid}] Downloaded ({received_file_sha256}) doesn't match requested ({sha256}). "
                                    "Reporting task error to service server.")
                     self.status = STATUSES.ERROR_FOUND
                     return

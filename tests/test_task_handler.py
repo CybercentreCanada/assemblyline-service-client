@@ -1,6 +1,7 @@
 import os
 import tempfile
-
+import json
+import requests
 import pytest
 import requests_mock
 from assemblyline_service_client import task_handler
@@ -239,7 +240,8 @@ def test_request_with_retries():
 
 
 # def test_try_run():
-#     default_th = task_handler.TaskHandler()
+    # default_th = task_handler.TaskHandler()
+#     default_th.load_service_manifest()
 #     default_th.session = Session()
 
 #     default_th.task_fifo_path = tempfile.mkstemp()
@@ -247,3 +249,269 @@ def test_request_with_retries():
 #     with requests_mock.Mocker() as m:
 #         m.put(default_th._path('service', 'register'), json={"api_response": {"keep_alive": False, "new_heuristics": []}})
 #         default_th.try_run()
+
+
+def test_connect_pipes():
+    default_th = task_handler.TaskHandler()
+    _, default_th.task_fifo_path = tempfile.mkstemp()
+    _, default_th.done_fifo_path = tempfile.mkstemp()
+
+    default_th.connect_pipes()
+    assert default_th.task_fifo.mode == "w"
+    assert os.path.exists(default_th.task_fifo_path)
+    assert default_th.done_fifo.mode == "r"
+    assert os.path.exists(default_th.done_fifo_path)
+
+
+def test_initialize_service():
+    default_th = task_handler.TaskHandler()
+    default_th.load_service_manifest()
+    default_th.session = Session()
+
+    _, default_th.task_fifo_path = tempfile.mkstemp()
+
+    with requests_mock.Mocker() as m:
+        # Do not keep alive
+        m.put(default_th._path('service', 'register'), json={"api_response": {"keep_alive": False, "new_heuristics": []}})
+        default_th.initialize_service()
+        assert default_th.status == task_handler.STATUSES.STOPPING
+
+        # Keep alive but register only
+        m.put(default_th._path('service', 'register'), json={"api_response": {"keep_alive": True, "new_heuristics": []}})
+        default_th.register_only = True
+        default_th.initialize_service()
+        assert default_th.status == task_handler.STATUSES.STOPPING
+
+        # Keep alive / do not register only
+        default_th.register_only = False
+        m.put(default_th._path('service', 'register'), json={"api_response": {"keep_alive": True, "new_heuristics": [], "service_config": {"other": "different stuff"}}})
+        default_th.initialize_service()
+
+    assert default_th.service_manifest_data == {
+        'name': 'Sample',
+        'version': 'sample',
+        'docker_config': {
+            'image': 'sample'
+        },
+        'heuristics': [
+            {
+                'heur_id': 17,
+                'name': 'blah',
+                'description': 'blah',
+                'filetype': '*',
+                'score': 250
+            }
+        ],
+        'other': 'different stuff'
+    }
+
+    assert default_th.status == task_handler.STATUSES.INITIALIZING
+
+
+def test_get_task():
+    default_th = task_handler.TaskHandler()
+    default_th.load_service_manifest()
+    default_th.session = Session()
+
+    with requests_mock.Mocker() as m:
+        # No task
+        m.get(default_th._path('task'), json={"api_response": {"task": False}})
+        default_th.get_task()
+
+        # Task received, but invalid. Should just see a log here.
+        m.get(default_th._path('task'), json={"api_response": {"task": {"service_config": {}}}})
+        default_th.get_task()
+
+        # Task received, is valid.
+        m.get(default_th._path('task'), json={
+            "api_response": {
+                "task": {
+                    "service_config": {},
+                    "metadata": {},
+                    "min_classification": "",
+                    "fileinfo": {
+                        "magic": "blah",
+                        "md5": "d41d8cd98f00b204e9800998ecf8427e",
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+                        "size": 0,
+                        "type": "text/plain",
+                    },
+                    "filename": "blah",
+                    "service_name": "blah",
+                    "max_files": 0,
+                }
+            }
+        })
+        task_as_prims = default_th.get_task().as_primitives()
+        # Need to pop the sid because this is a randomly generated value
+        task_as_prims.pop("sid")
+        task_as_prims == {
+            'deep_scan': False,
+            'depth': 0,
+            'fileinfo': {'magic': 'blah',
+                         'md5': 'd41d8cd98f00b204e9800998ecf8427e',
+                         'mime': None,
+                         'sha1': 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
+                         'sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                         'size': 0,
+                         'type': 'text/plain'},
+            'filename': 'blah',
+            'ignore_cache': False,
+            'ignore_dynamic_recursion_prevention': False,
+            'ignore_filtering': False,
+            'max_files': 0,
+            'metadata': {},
+            'min_classification': 'TLP:C',
+            'priority': 0,
+            'safelist_config': {'enabled': False,
+                                'enforce_safelist_service': False,
+                                'hash_types': ['sha1',
+                                               'sha256']},
+            'service_config': {},
+            'service_name': 'blah',
+            # 'sid': '4bqSlBuxKuO6KdZrxYBqMC',
+            'tags': [],
+            'temporary_submission_data': [],
+            'ttl': 0,
+        }
+        assert default_th.status == task_handler.STATUSES.WAITING_FOR_TASK
+
+
+def test_download_file():
+    default_th = task_handler.TaskHandler()
+    default_th.load_service_manifest()
+    default_th.session = Session()
+    default_th.headers = dict()
+
+    sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    sid = "4bqSlBuxKuO6KdZrxYBqMC"
+
+    with requests_mock.Mocker() as m:
+        # Content does not match given sha256
+        m.get(default_th._path('file', sha256), text="blah")
+        assert default_th.download_file(sha256, sid) is None
+        assert default_th.status == task_handler.STATUSES.ERROR_FOUND
+
+        # Content does match given sha256
+        m.get(default_th._path('file', sha256))
+        assert default_th.download_file(sha256, sid) == '/tmp/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+        assert default_th.status == task_handler.STATUSES.DOWNLOADING_FILE_COMPLETED
+
+        # Status code 404
+        m.get(default_th._path('file', sha256), status_code=404)
+        assert default_th.download_file(sha256, sid) is None
+        assert default_th.status == task_handler.STATUSES.FILE_NOT_FOUND
+
+        # Status code 500
+        m.get(default_th._path('file', sha256), status_code=500, reason="cuz")
+        assert default_th.download_file(sha256, sid) is None
+        assert default_th.status == task_handler.STATUSES.ERROR_FOUND
+
+
+def test_handle_task_result():
+    default_th = task_handler.TaskHandler()
+    default_th.load_service_manifest()
+    default_th.session = Session()
+
+    _, result_json_path = tempfile.mkstemp()
+    _, extracted_path = tempfile.mkstemp()
+    with open(result_json_path, "w") as f:
+        f.write(json.dumps({
+            "response": {
+                "extracted": [
+                    {
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "classification": "blah",
+                        "path": extracted_path,
+                    }
+                ],
+                "supplementary": [],
+                "service_tool_version": "123"
+            }
+        }))
+
+    with requests_mock.Mocker() as m:
+        m.get(default_th._path('task'), json={
+            "api_response": {
+                "task": {
+                    "service_config": {},
+                    "metadata": {},
+                    "min_classification": "",
+                    "fileinfo": {
+                        "magic": "blah",
+                        "md5": "d41d8cd98f00b204e9800998ecf8427e",
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+                        "size": 0,
+                        "type": "text/plain",
+                    },
+                    "filename": "blah",
+                    "service_name": "blah",
+                    "max_files": 0,
+                }
+            }
+        })
+        task = default_th.get_task()
+
+        # It works!
+        m.post(default_th._path('task'), json={"api_response": {"success": True}})
+        assert default_th.handle_task_result(result_json_path, task) is None
+        assert default_th.session.headers["service_tool_version"] == "123"
+
+        # It doesn't work (the first three times)
+        callback_iteration = 0
+        def json_callback(request, context):
+            nonlocal callback_iteration
+            if callback_iteration < 4:
+                response = {"api_response": {"success": False, "missing_files": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]}}
+            else:
+                response = {"api_response": {"success": True}}
+            callback_iteration += 1
+            return response
+
+        m.post(default_th._path('task'), json=json_callback)
+        m.put(default_th._path('file'), json={"api_response": {}}, )
+
+        assert default_th.handle_task_result(result_json_path, task) is None
+        assert default_th.session.headers["service_tool_version"] == "123"
+
+        # ServiceServerException!
+        m.post(default_th._path('task'), exc=task_handler.ServiceServerException)
+        with pytest.raises(task_handler.ServiceServerException):
+            default_th.handle_task_result(result_json_path, task)
+
+        # requests.HTTPError
+        m.post(default_th._path('task'), exc=requests.HTTPError)
+        with pytest.raises(requests.HTTPError):
+            default_th.handle_task_result(result_json_path, task)
+
+
+# def test_handle_task_error():
+#     default_th = task_handler.TaskHandler()
+#     default_th.load_service_manifest()
+#     default_th.session = Session()
+
+#     with requests_mock.Mocker() as m:
+#         m.get(default_th._path('task'), json={
+#             "api_response": {
+#                 "task": {
+#                     "service_config": {},
+#                     "metadata": {},
+#                     "min_classification": "",
+#                     "fileinfo": {
+#                         "magic": "blah",
+#                         "md5": "d41d8cd98f00b204e9800998ecf8427e",
+#                         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+#                         "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+#                         "size": 0,
+#                         "type": "text/plain",
+#                     },
+#                     "filename": "blah",
+#                     "service_name": "blah",
+#                     "max_files": 0,
+#                 }
+#             }
+#         })
+#         task = default_th.get_task()
+#         default_th.handle_task_error(task)
