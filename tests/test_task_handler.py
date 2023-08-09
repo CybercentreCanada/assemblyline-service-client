@@ -1,8 +1,9 @@
+import json
 import os
 import tempfile
-import json
-import requests
+
 import pytest
+import requests
 import requests_mock
 from assemblyline_service_client import task_handler
 from requests import ConnectionError, HTTPError, Session, Timeout, exceptions
@@ -487,31 +488,58 @@ def test_handle_task_result():
             default_th.handle_task_result(result_json_path, task)
 
 
-# def test_handle_task_error():
-#     default_th = task_handler.TaskHandler()
-#     default_th.load_service_manifest()
-#     default_th.session = Session()
+def test_handle_task_error():
+    default_th = task_handler.TaskHandler()
+    default_th.load_service_manifest()
+    default_th.session = Session()
 
-#     with requests_mock.Mocker() as m:
-#         m.get(default_th._path('task'), json={
-#             "api_response": {
-#                 "task": {
-#                     "service_config": {},
-#                     "metadata": {},
-#                     "min_classification": "",
-#                     "fileinfo": {
-#                         "magic": "blah",
-#                         "md5": "d41d8cd98f00b204e9800998ecf8427e",
-#                         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-#                         "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-#                         "size": 0,
-#                         "type": "text/plain",
-#                     },
-#                     "filename": "blah",
-#                     "service_name": "blah",
-#                     "max_files": 0,
-#                 }
-#             }
-#         })
-#         task = default_th.get_task()
-#         default_th.handle_task_error(task)
+    with requests_mock.Mocker() as m:
+        m.get(default_th._path('task'), json={
+            "api_response": {
+                "task": {
+                    "service_config": {},
+                    "metadata": {},
+                    "min_classification": "",
+                    "fileinfo": {
+                        "magic": "blah",
+                        "md5": "d41d8cd98f00b204e9800998ecf8427e",
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+                        "size": 0,
+                        "type": "text/plain",
+                    },
+                    "filename": "blah",
+                    "service_name": "blah",
+                    "max_files": 0,
+                }
+            }
+        })
+        task = default_th.get_task()
+
+        m.post(default_th._path('task'), json={"api_response": {"success": True}})
+        default_th.handle_task_error(task)
+
+
+def test_stop():
+    default_th = task_handler.TaskHandler()
+    default_th.load_service_manifest()
+
+    # WAITING_FOR_TASK
+    default_th.status = task_handler.STATUSES.WAITING_FOR_TASK
+    default_th.stop()
+    assert default_th._shutdown_timeout == 90
+
+    # ELSE
+    default_th.status = "BLAH"
+    default_th.stop()
+    assert default_th._shutdown_timeout == 60
+
+    # INITIALIZING
+    default_th.status = task_handler.STATUSES.INITIALIZING
+    default_th.stop()
+    assert default_th._shutdown_timeout == 10
+
+    # Open done_fifo and task_fifo
+    default_th.done_fifo = open(tempfile.mkstemp()[0])
+    default_th.task_fifo = open(tempfile.mkstemp()[0])
+    default_th.stop()
