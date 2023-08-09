@@ -240,16 +240,28 @@ def test_request_with_retries():
             default_th.request_with_retries("get", url, get_api_response=True)
 
 
-# def test_try_run():
-    # default_th = task_handler.TaskHandler()
-#     default_th.load_service_manifest()
-#     default_th.session = Session()
+def test_try_run():
+    default_th = task_handler.TaskHandler()
+    default_th.load_service_manifest()
+    default_th.session = Session()
 
-#     default_th.task_fifo_path = tempfile.mkstemp()
+    _, default_th.task_fifo_path = tempfile.mkstemp()
 
-#     with requests_mock.Mocker() as m:
-#         m.put(default_th._path('service', 'register'), json={"api_response": {"keep_alive": False, "new_heuristics": []}})
-#         default_th.try_run()
+    with requests_mock.Mocker() as m:
+        m.put(default_th._path('service', 'register'), json={"api_response": {"keep_alive": True, "new_heuristics": [], "service_config": {}}})
+        default_th.register_only = False
+
+        # Case where self.running is false
+        default_th.running = False
+        default_th.try_run()
+
+        # Cases where self.running is True
+        default_th.running = True
+
+        # # Case where self.tasks_processed >= TASK_COMPLETE_LIMIT
+        os.environ["AL_SERVICE_TASK_LIMIT"] = "1"
+        default_th.tasks_processed = 2
+        # default_th.try_run()
 
 
 def test_connect_pipes():
