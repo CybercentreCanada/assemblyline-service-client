@@ -5,10 +5,10 @@ import tempfile
 import pytest
 import requests
 import requests_mock
-from assemblyline_service_client import task_handler
+from assemblyline.odm.models.service import Service
 from requests import ConnectionError, HTTPError, Session, Timeout, exceptions
 
-from assemblyline.odm.models.service import Service
+from assemblyline_service_client import task_handler
 
 SERVICE_CONFIG_NAME = "service_manifest.yml"
 TEMP_SERVICE_CONFIG_PATH = os.path.join("/tmp", SERVICE_CONFIG_NAME)
@@ -244,8 +244,10 @@ def test_try_run():
     default_th = task_handler.TaskHandler()
     default_th.load_service_manifest()
     default_th.session = Session()
+    default_th.headers = dict()
 
     _, default_th.task_fifo_path = tempfile.mkstemp()
+    _, default_th.done_fifo_path = tempfile.mkstemp()
 
     with requests_mock.Mocker() as m:
         m.put(default_th._path('service', 'register'), json={"api_response": {"keep_alive": True, "new_heuristics": [], "service_config": {}}})
@@ -259,9 +261,40 @@ def test_try_run():
         default_th.running = True
 
         # # Case where self.tasks_processed >= TASK_COMPLETE_LIMIT
-        os.environ["AL_SERVICE_TASK_LIMIT"] = "1"
-        default_th.tasks_processed = 2
-        # default_th.try_run()
+        default_th.tasks_processed = 1
+        task_handler.TASK_COMPLETE_LIMIT = 1
+        default_th.try_run()
+
+        m.get(default_th._path('task'), json={
+            "api_response": {
+                "task": {
+                    "service_config": {},
+                    "metadata": {},
+                    "min_classification": "",
+                    "fileinfo": {
+                        "magic": "blah",
+                        "md5": "d41d8cd98f00b204e9800998ecf8427e",
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+                        "size": 0,
+                        "type": "text/plain",
+                    },
+                    "filename": "blah",
+                    "service_name": "blah",
+                    "max_files": 0,
+                }
+            }
+        })
+        m.get(default_th._path('file', "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"))
+        m.post(default_th._path('task'), json={"api_response": {"success": True}})
+
+        task_handler.TASK_COMPLETE_LIMIT = 2
+        default_th.running = True
+        with open(default_th.done_fifo_path, "w") as f:
+            f.write(json.dumps(("/path/to/json", "blah")))
+        default_th.try_run()
+        assert default_th.status == "blah"
+        assert default_th.task is None
 
 
 def test_connect_pipes():
