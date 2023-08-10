@@ -296,6 +296,9 @@ def test_try_run():
         assert default_th.status == "blah"
         assert default_th.task is None
 
+        # Need to call this again since the service manifest gets deleted
+        setup_module()
+
 
 def test_connect_pipes():
     default_th = task_handler.TaskHandler()
