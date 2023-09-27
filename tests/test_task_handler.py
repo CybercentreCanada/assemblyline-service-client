@@ -462,6 +462,7 @@ def test_handle_task_result():
     default_th = task_handler.TaskHandler()
     default_th.load_service_manifest()
     default_th.session = Session()
+    default_th.headers = dict()
 
     _, result_json_path = tempfile.mkstemp()
     _, extracted_path = tempfile.mkstemp()
@@ -507,6 +508,7 @@ def test_handle_task_result():
         m.post(default_th._path('task'), json={"api_response": {"success": True}})
         assert default_th.handle_task_result(result_json_path, task) is None
         assert default_th.session.headers["service_tool_version"] == "123"
+        assert default_th.headers["service_tool_version"] == "123"
 
         # It doesn't work (the first three times)
         callback_iteration = 0
