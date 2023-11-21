@@ -47,8 +47,9 @@ class ServiceServerException(Exception):
 
 
 class TaskHandler(ServerBase):
-    def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT, api_host=None, api_key=None,
-                 container_id=None, register_only=False, container_mode=False):
+    def __init__(self, shutdown_timeout: float = SHUTDOWN_SECONDS_LIMIT, api_host: Optional[str] = None,
+                 api_key: Optional[str] = None, container_id: Optional[str] = None, register_only: bool = False,
+                 container_mode: bool = False) -> None:
         super().__init__('assemblyline.service.task_handler', shutdown_timeout=shutdown_timeout)
 
         self.service_manifest_yml = f"/tmp/{os.environ.get('RUNTIME_PREFIX', 'service')}_manifest.yml"
@@ -63,29 +64,29 @@ class TaskHandler(ServerBase):
         self.done_fifo = None
         self.tasks_processed = 0
 
-        self.service = None
+        self.service: Optional[Service] = None
         self.service_manifest_data = None
-        self.service_heuristics = []
-        self.service_tool_version = None
+        self.service_heuristics: list[dict] = []
+        self.service_tool_version: Optional[str] = None
         self.file_required = None
-        self.service_api_host = api_host or os.environ.get('SERVICE_API_HOST', 'http://localhost:5003')
-        self.service_api_key = api_key or os.environ.get('SERVICE_API_KEY', DEFAULT_API_KEY)
-        self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
-        self.session = None
-        self.headers = None
+        self.service_api_host: str = api_host or os.environ.get('SERVICE_API_HOST') or 'http://localhost:5003'
+        self.service_api_key: str = api_key or os.environ.get('SERVICE_API_KEY') or DEFAULT_API_KEY
+        self.container_id: str = container_id or os.environ.get('HOSTNAME') or 'dev-service'
+        self.session = requests.Session()
+        self.headers: dict[str, str] = {}
         self.task = None
         self.tasking_dir = os.environ.get('TASKING_DIR', tempfile.gettempdir())
 
         self.log.setLevel(LOG_LEVEL)
 
-    def _path(self, prefix, *args) -> str:
+    def _path(self, prefix: str, *args: str) -> str:
         """
         Calculate the API path using the prefix as shown:
             /api/v1/<prefix>/[arg1/[arg2/[...]]][?k1=v1[...]]
         """
         return os.path.join(self.service_api_host, 'api', SUPPORTED_API, prefix, *args) + '/'
 
-    def start(self):
+    def start(self) -> None:
         self.log.info("Loading service manifest...")
         if self.service_api_key == DEFAULT_API_KEY:
             key = '**default key** - You should consider setting SERVICE_API_KEY in your service containers'
@@ -98,15 +99,14 @@ class TaskHandler(ServerBase):
         self.load_service_manifest()
         self.log.info("----------------------------")
 
-        self.headers = dict(
-            X_APIKEY=self.service_api_key,
-            container_id=self.container_id,
-            service_name=self.service.name,
-            service_version=self.service.version,
-            service_tool_version=self.service_tool_version,
-        )
+        self.headers = {
+            "X-APIKey": self.service_api_key,
+            "Container-ID": self.container_id,
+            "Service-Name": self.service.name,
+            "Service-Version": self.service.version,
+            "Service-Tool-Version": self.service_tool_version or '',
+        }
 
-        self.session = requests.Session()
         self.session.headers.update(self.headers)
         if self.service_api_host.startswith('https'):
             self.session.verify = os.environ.get('SERVICE_SERVER_ROOT_CA_PATH', '/etc/assemblyline/ssl/al_root-ca.crt')
