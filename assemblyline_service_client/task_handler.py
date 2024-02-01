@@ -177,7 +177,8 @@ class TaskHandler(ServerBase):
                 except Exception:
                     pass
 
-    def request_with_retries(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs) -> Optional[Any]:
+    def request_with_retries(
+            self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs) -> Optional[Any]:
         if 'headers' in kwargs:
             self.session.headers.update(kwargs['headers'])
             kwargs.pop('headers')
@@ -432,7 +433,8 @@ class TaskHandler(ServerBase):
                             sha256=file_info['sha256'],
                             classification=file_info['classification'],
                             ttl=str(task.ttl),
-                            is_section_image=str(file_info.get('is_section_image', False))
+                            is_section_image=str(file_info.get('is_section_image', False)),
+                            is_supplementary=str(file_info.get('is_supplementary', False))
                         )
 
                         with open(file_info['path'], 'rb') as fh:
