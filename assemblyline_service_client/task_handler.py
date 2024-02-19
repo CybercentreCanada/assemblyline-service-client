@@ -489,12 +489,10 @@ class TaskHandler(ServerBase):
 
         super().stop()
 
-        self.log.info("Closing named pipes...")
-        if self.done_fifo is not None:
-            try:
-                self.done_fifo.close()
-            except BrokenPipeError:
-                pass
+        # We only want to close the tasking pipe to trigger the service to stop waiting.
+        # We need to wait on the service to finish the current task and close our done_fifo
+        # pipe so that it can be sent back to the system.
+        self.log.info("Closing task_fifo named pipes...")
         if self.task_fifo is not None:
             try:
                 self.task_fifo.close()
