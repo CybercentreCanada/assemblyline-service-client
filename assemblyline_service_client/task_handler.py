@@ -212,7 +212,8 @@ class TaskHandler(ServerBase):
                 elif retry % 10 == 0:
                     self.log.warning(f"Service server has been unreachable for the past {retry} attempts. "
                                      "Is there something wrong with it?")
-            except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
+            except requests.Timeout as e:  # Handles ConnectTimeout and ReadTimeout
+                self.log.warning(f"We've timed out on: {url} ({e}) Retrying..")
                 pass
             except requests.HTTPError as e:
                 self.log.error(str(e))
