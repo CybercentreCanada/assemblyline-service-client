@@ -439,8 +439,13 @@ class TaskHandler(ServerBase):
                         with open(file_info['path'], 'rb') as fh:
                             # Upload the file requested by service server
                             self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
-                            self.request_with_retries('put', self._path('file'), files=dict(file=fh), headers=headers,
-                                                      timeout=FILE_REQUEST_TIMEOUT)
+                            try:
+                                self.request_with_retries('put', self._path('file'), files=dict(file=fh),
+                                                          headers=headers,timeout=FILE_REQUEST_TIMEOUT)
+                            except ServiceServerException as e:
+                                if "does not match expected file hash" in str(e):
+                                    self.log.warning(f"File upload of '{file_info['path']}' failed.")
+                                raise
 
                     data['freshen'] = False
                     r = self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
