@@ -35,6 +35,7 @@ LOG_LEVEL = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
 SHUTDOWN_SECONDS_LIMIT = 10
 SUPPORTED_API = 'v1'
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
+FILE_REQUEST_TIMEOUT = int(os.environ.get('FILE_REQUEST_TIMEOUT', 180))
 
 
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
@@ -368,7 +369,7 @@ class TaskHandler(ServerBase):
         file_path = None
         self.log.info(f"[{sid}] Downloading file: {sha256}")
         response = self.request_with_retries('get', self._path('file', sha256),
-                                             get_api_response=False, max_retry=3, headers=self.headers)
+                                             get_api_response=False, max_retry=3, headers=self.headers, timeout=FILE_REQUEST_TIMEOUT)
         if response is not None:
             # Check if we got a 'good' response
             if response.status_code == 200:
@@ -438,7 +439,8 @@ class TaskHandler(ServerBase):
                         with open(file_info['path'], 'rb') as fh:
                             # Upload the file requested by service server
                             self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
-                            self.request_with_retries('put', self._path('file'), files=dict(file=fh), headers=headers)
+                            self.request_with_retries('put', self._path('file'), files=dict(file=fh), headers=headers,
+                                                      timeout=FILE_REQUEST_TIMEOUT)
 
                     data['freshen'] = False
                     r = self.request_with_retries('post', self._path('task'), json=data)
