@@ -423,7 +423,7 @@ class TaskHandler(ServerBase):
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
-            r = self.request_with_retries('post', self._path('task'), json=data)
+            r = self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
 
             if not r['success'] and r['missing_files']:
                 while not r['success'] and r['missing_files']:
@@ -443,7 +443,7 @@ class TaskHandler(ServerBase):
                                                       timeout=FILE_REQUEST_TIMEOUT)
 
                     data['freshen'] = False
-                    r = self.request_with_retries('post', self._path('task'), json=data)
+                    r = self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
         except (ServiceServerException, requests.HTTPError) as e:
             self.handle_task_error(task, message=str(e), error_type='EXCEPTION', status='FAIL_NONRECOVERABLE')
 
@@ -476,7 +476,7 @@ class TaskHandler(ServerBase):
                 self.log.exception(f"[{task.sid}] An error occurred while loading service error file.")
 
         data = dict(task=task.as_primitives(), error=error)
-        self.request_with_retries('post', self._path('task'), json=data)
+        self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
 
     def stop(self):
         if self.status == STATUSES.WAITING_FOR_TASK:
