@@ -35,6 +35,7 @@ LOG_LEVEL = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
 SHUTDOWN_SECONDS_LIMIT = 10
 SUPPORTED_API = 'v1'
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
+FILE_REQUEST_TIMEOUT = int(os.environ.get('FILE_REQUEST_TIMEOUT', 180))
 
 
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
@@ -212,7 +213,8 @@ class TaskHandler(ServerBase):
                 elif retry % 10 == 0:
                     self.log.warning(f"Service server has been unreachable for the past {retry} attempts. "
                                      "Is there something wrong with it?")
-            except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
+            except requests.Timeout as e:  # Handles ConnectTimeout and ReadTimeout
+                self.log.warning(f"We've timed out on: {url} ({e}) Retrying..")
                 pass
             except requests.HTTPError as e:
                 self.log.error(str(e))
@@ -367,7 +369,7 @@ class TaskHandler(ServerBase):
         file_path = None
         self.log.info(f"[{sid}] Downloading file: {sha256}")
         response = self.request_with_retries('get', self._path('file', sha256),
-                                             get_api_response=False, max_retry=3, headers=self.headers)
+                                             get_api_response=False, max_retry=3, headers=self.headers, timeout=FILE_REQUEST_TIMEOUT)
         if response is not None:
             # Check if we got a 'good' response
             if response.status_code == 200:
@@ -421,7 +423,7 @@ class TaskHandler(ServerBase):
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
-            r = self.request_with_retries('post', self._path('task'), json=data)
+            r = self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
 
             if not r['success'] and r['missing_files']:
                 while not r['success'] and r['missing_files']:
@@ -437,10 +439,16 @@ class TaskHandler(ServerBase):
                         with open(file_info['path'], 'rb') as fh:
                             # Upload the file requested by service server
                             self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
-                            self.request_with_retries('put', self._path('file'), files=dict(file=fh), headers=headers)
+                            try:
+                                self.request_with_retries('put', self._path('file'), files=dict(file=fh),
+                                                          headers=headers,timeout=FILE_REQUEST_TIMEOUT)
+                            except ServiceServerException as e:
+                                if "does not match expected file hash" in str(e):
+                                    self.log.warning(f"File upload of '{file_info['path']}' failed.")
+                                raise
 
                     data['freshen'] = False
-                    r = self.request_with_retries('post', self._path('task'), json=data)
+                    r = self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
         except (ServiceServerException, requests.HTTPError) as e:
             self.handle_task_error(task, message=str(e), error_type='EXCEPTION', status='FAIL_NONRECOVERABLE')
 
@@ -473,7 +481,7 @@ class TaskHandler(ServerBase):
                 self.log.exception(f"[{task.sid}] An error occurred while loading service error file.")
 
         data = dict(task=task.as_primitives(), error=error)
-        self.request_with_retries('post', self._path('task'), json=data)
+        self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
 
     def stop(self):
         if self.status == STATUSES.WAITING_FOR_TASK:
