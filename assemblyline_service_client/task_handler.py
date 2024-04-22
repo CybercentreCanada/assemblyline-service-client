@@ -433,8 +433,8 @@ class TaskHandler(ServerBase):
                             sha256=file_info['sha256'],
                             classification=file_info['classification'],
                             ttl=str(task.ttl),
-                            is_section_image=str(file_info.get('is_section_image', False))
                         )
+                        headers["Is-Section-Image"] = str(file_info.get('is_section_image', False))
 
                         with open(file_info['path'], 'rb') as fh:
                             # Upload the file requested by service server
