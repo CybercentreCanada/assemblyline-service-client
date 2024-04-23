@@ -177,7 +177,8 @@ class TaskHandler(ServerBase):
                 except Exception:
                     pass
 
-    def request_with_retries(self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs) -> Optional[Any]:
+    def request_with_retries(self, method: str, url: str,
+                             get_api_response=True, max_retry=None, **kwargs) -> Optional[Any]:
         if 'headers' in kwargs:
             self.session.headers.update(kwargs['headers'])
             kwargs.pop('headers')
@@ -344,7 +345,7 @@ class TaskHandler(ServerBase):
     def get_task(self) -> ServiceTask:
         self.status = STATUSES.WAITING_FOR_TASK
         task = None
-        headers = dict(timeout=str(TASK_REQUEST_TIMEOUT))
+        headers = {"Timeout": str(TASK_REQUEST_TIMEOUT)}
         self.log.info(f"Requesting a task with {TASK_REQUEST_TIMEOUT}s timeout...")
         r = self.request_with_retries('get', self._path('task'), headers=headers, timeout=TASK_REQUEST_TIMEOUT*2)
         if r['task'] is False:  # No task received
@@ -369,7 +370,8 @@ class TaskHandler(ServerBase):
         file_path = None
         self.log.info(f"[{sid}] Downloading file: {sha256}")
         response = self.request_with_retries('get', self._path('file', sha256),
-                                             get_api_response=False, max_retry=3, headers=self.headers, timeout=FILE_REQUEST_TIMEOUT)
+                                             get_api_response=False, max_retry=3, headers=self.headers,
+                                             timeout=FILE_REQUEST_TIMEOUT)
         if response is not None:
             # Check if we got a 'good' response
             if response.status_code == 200:
@@ -418,8 +420,8 @@ class TaskHandler(ServerBase):
         new_tool_version = result.get('response', {}).get('service_tool_version', None)
         if new_tool_version is not None and self.service_tool_version != new_tool_version:
             self.service_tool_version = new_tool_version
-            self.session.headers.update({'service_tool_version': self.service_tool_version})
-            self.headers.update({'service_tool_version': self.service_tool_version})
+            self.session.headers.update({'Service-Tool-Version': self.service_tool_version})
+            self.headers.update({'Service-Tool-Version': self.service_tool_version})
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
@@ -429,19 +431,19 @@ class TaskHandler(ServerBase):
                 while not r['success'] and r['missing_files']:
                     for f_sha256 in r['missing_files']:
                         file_info = result_files[f_sha256]
-                        headers = dict(
-                            sha256=file_info['sha256'],
-                            classification=file_info['classification'],
-                            ttl=str(task.ttl),
-                        )
-                        headers["Is-Section-Image"] = str(file_info.get('is_section_image', False))
+                        headers = {
+                            "Sha256": file_info['sha256'],
+                            "Classification": file_info['classification'],
+                            "Ttl": str(task.ttl),
+                            "Is-Section-Image": str(file_info.get('is_section_image', False))
+                        }
 
                         with open(file_info['path'], 'rb') as fh:
                             # Upload the file requested by service server
                             self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
                             try:
                                 self.request_with_retries('put', self._path('file'), files=dict(file=fh),
-                                                          headers=headers,timeout=FILE_REQUEST_TIMEOUT)
+                                                          headers=headers, timeout=FILE_REQUEST_TIMEOUT)
                             except ServiceServerException as e:
                                 if "does not match expected file hash" in str(e):
                                     self.log.warning(f"File upload of '{file_info['path']}' failed.")
