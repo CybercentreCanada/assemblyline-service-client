@@ -35,6 +35,7 @@ LOG_LEVEL = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
 SHUTDOWN_SECONDS_LIMIT = 10
 SUPPORTED_API = 'v1'
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
+FILE_REQUEST_TIMEOUT = int(os.environ.get('FILE_REQUEST_TIMEOUT', 180))
 
 
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
@@ -47,8 +48,9 @@ class ServiceServerException(Exception):
 
 
 class TaskHandler(ServerBase):
-    def __init__(self, shutdown_timeout=SHUTDOWN_SECONDS_LIMIT, api_host=None, api_key=None,
-                 container_id=None, register_only=False, container_mode=False):
+    def __init__(self, shutdown_timeout: float = SHUTDOWN_SECONDS_LIMIT, api_host: Optional[str] = None,
+                 api_key: Optional[str] = None, container_id: Optional[str] = None, register_only: bool = False,
+                 container_mode: bool = False) -> None:
         super().__init__('assemblyline.service.task_handler', shutdown_timeout=shutdown_timeout)
 
         self.service_manifest_yml = f"/tmp/{os.environ.get('RUNTIME_PREFIX', 'service')}_manifest.yml"
@@ -63,29 +65,29 @@ class TaskHandler(ServerBase):
         self.done_fifo = None
         self.tasks_processed = 0
 
-        self.service = None
+        self.service: Optional[Service] = None
         self.service_manifest_data = None
-        self.service_heuristics = []
-        self.service_tool_version = None
+        self.service_heuristics: list[dict] = []
+        self.service_tool_version: Optional[str] = None
         self.file_required = None
-        self.service_api_host = api_host or os.environ.get('SERVICE_API_HOST', 'http://localhost:5003')
-        self.service_api_key = api_key or os.environ.get('SERVICE_API_KEY', DEFAULT_API_KEY)
-        self.container_id = container_id or os.environ.get('HOSTNAME', 'dev-service')
-        self.session = None
-        self.headers = None
+        self.service_api_host: str = api_host or os.environ.get('SERVICE_API_HOST') or 'http://localhost:5003'
+        self.service_api_key: str = api_key or os.environ.get('SERVICE_API_KEY') or DEFAULT_API_KEY
+        self.container_id: str = container_id or os.environ.get('HOSTNAME') or 'dev-service'
+        self.session = requests.Session()
+        self.headers: dict[str, str] = {}
         self.task = None
         self.tasking_dir = os.environ.get('TASKING_DIR', tempfile.gettempdir())
 
         self.log.setLevel(LOG_LEVEL)
 
-    def _path(self, prefix, *args) -> str:
+    def _path(self, prefix: str, *args: str) -> str:
         """
         Calculate the API path using the prefix as shown:
             /api/v1/<prefix>/[arg1/[arg2/[...]]][?k1=v1[...]]
         """
         return os.path.join(self.service_api_host, 'api', SUPPORTED_API, prefix, *args) + '/'
 
-    def start(self):
+    def start(self) -> None:
         self.log.info("Loading service manifest...")
         if self.service_api_key == DEFAULT_API_KEY:
             key = '**default key** - You should consider setting SERVICE_API_KEY in your service containers'
@@ -98,15 +100,14 @@ class TaskHandler(ServerBase):
         self.load_service_manifest()
         self.log.info("----------------------------")
 
-        self.headers = dict(
-            X_APIKEY=self.service_api_key,
-            container_id=self.container_id,
-            service_name=self.service.name,
-            service_version=self.service.version,
-            service_tool_version=self.service_tool_version,
-        )
+        self.headers = {
+            "X-APIKey": self.service_api_key,
+            "Container-ID": self.container_id,
+            "Service-Name": self.service.name,
+            "Service-Version": self.service.version,
+            "Service-Tool-Version": self.service_tool_version or '',
+        }
 
-        self.session = requests.Session()
         self.session.headers.update(self.headers)
         if self.service_api_host.startswith('https'):
             self.session.verify = os.environ.get('SERVICE_SERVER_ROOT_CA_PATH', '/etc/assemblyline/ssl/al_root-ca.crt')
@@ -167,8 +168,7 @@ class TaskHandler(ServerBase):
     def cleanup_working_directory(self, folder_path):
         for file in os.listdir(folder_path):
             file_path = os.path.join(folder_path, file)
-            # if file_path not in [self.task_fifo_path, self.done_fifo_path]:
-            if file_path != self.task_fifo_path or file_path != self.done_fifo_path:
+            if file_path not in [self.task_fifo_path, self.done_fifo_path, self.service_manifest_yml]:
                 try:
                     if os.path.isfile(file_path):
                         os.unlink(file_path)
@@ -177,8 +177,8 @@ class TaskHandler(ServerBase):
                 except Exception:
                     pass
 
-    def request_with_retries(
-            self, method: str, url: str, get_api_response=True, max_retry=None, **kwargs) -> Optional[Any]:
+    def request_with_retries(self, method: str, url: str,
+                             get_api_response=True, max_retry=None, **kwargs) -> Optional[Any]:
         if 'headers' in kwargs:
             self.session.headers.update(kwargs['headers'])
             kwargs.pop('headers')
@@ -214,7 +214,8 @@ class TaskHandler(ServerBase):
                 elif retry % 10 == 0:
                     self.log.warning(f"Service server has been unreachable for the past {retry} attempts. "
                                      "Is there something wrong with it?")
-            except requests.Timeout:  # Handles ConnectTimeout and ReadTimeout
+            except requests.Timeout as e:  # Handles ConnectTimeout and ReadTimeout
+                self.log.warning(f"We've timed out on: {url} ({e}) Retrying..")
                 pass
             except requests.HTTPError as e:
                 self.log.error(str(e))
@@ -344,7 +345,7 @@ class TaskHandler(ServerBase):
     def get_task(self) -> ServiceTask:
         self.status = STATUSES.WAITING_FOR_TASK
         task = None
-        headers = dict(timeout=str(TASK_REQUEST_TIMEOUT))
+        headers = {"Timeout": str(TASK_REQUEST_TIMEOUT)}
         self.log.info(f"Requesting a task with {TASK_REQUEST_TIMEOUT}s timeout...")
         r = self.request_with_retries('get', self._path('task'), headers=headers, timeout=TASK_REQUEST_TIMEOUT*2)
         if r['task'] is False:  # No task received
@@ -369,7 +370,8 @@ class TaskHandler(ServerBase):
         file_path = None
         self.log.info(f"[{sid}] Downloading file: {sha256}")
         response = self.request_with_retries('get', self._path('file', sha256),
-                                             get_api_response=False, max_retry=3, headers=self.headers)
+                                             get_api_response=False, max_retry=3, headers=self.headers,
+                                             timeout=FILE_REQUEST_TIMEOUT)
         if response is not None:
             # Check if we got a 'good' response
             if response.status_code == 200:
@@ -418,32 +420,38 @@ class TaskHandler(ServerBase):
         new_tool_version = result.get('response', {}).get('service_tool_version', None)
         if new_tool_version is not None and self.service_tool_version != new_tool_version:
             self.service_tool_version = new_tool_version
-            self.session.headers.update({'service_tool_version': self.service_tool_version})
-            self.headers.update({'service_tool_version': self.service_tool_version})
+            self.session.headers.update({'Service-Tool-Version': self.service_tool_version})
+            self.headers.update({'Service-Tool-Version': self.service_tool_version})
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
-            r = self.request_with_retries('post', self._path('task'), json=data)
+            r = self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
 
             if not r['success'] and r['missing_files']:
                 while not r['success'] and r['missing_files']:
                     for f_sha256 in r['missing_files']:
                         file_info = result_files[f_sha256]
-                        headers = dict(
-                            sha256=file_info['sha256'],
-                            classification=file_info['classification'],
-                            ttl=str(task.ttl),
-                            is_section_image=str(file_info.get('is_section_image', False)),
-                            is_supplementary=str(file_info.get('is_supplementary', False))
-                        )
+                        headers = {
+                            "Sha256": file_info['sha256'],
+                            "Classification": file_info['classification'],
+                            "Ttl": str(task.ttl),
+                            "Is-Section-Image": str(file_info.get('is_section_image', False)),
+                            "is-Supplementary": str(file_info.get('is_supplementary', False))
+                        }
 
                         with open(file_info['path'], 'rb') as fh:
                             # Upload the file requested by service server
                             self.log.info(f"[{task.sid}] Uploading file {file_info['path']} [{file_info['sha256']}]")
-                            self.request_with_retries('put', self._path('file'), files=dict(file=fh), headers=headers)
+                            try:
+                                self.request_with_retries('put', self._path('file'), files=dict(file=fh),
+                                                          headers=headers, timeout=FILE_REQUEST_TIMEOUT)
+                            except ServiceServerException as e:
+                                if "does not match expected file hash" in str(e):
+                                    self.log.warning(f"File upload of '{file_info['path']}' failed.")
+                                raise
 
                     data['freshen'] = False
-                    r = self.request_with_retries('post', self._path('task'), json=data)
+                    r = self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
         except (ServiceServerException, requests.HTTPError) as e:
             self.handle_task_error(task, message=str(e), error_type='EXCEPTION', status='FAIL_NONRECOVERABLE')
 
@@ -476,7 +484,7 @@ class TaskHandler(ServerBase):
                 self.log.exception(f"[{task.sid}] An error occurred while loading service error file.")
 
         data = dict(task=task.as_primitives(), error=error)
-        self.request_with_retries('post', self._path('task'), json=data)
+        self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
 
     def stop(self):
         if self.status == STATUSES.WAITING_FOR_TASK:
@@ -491,12 +499,10 @@ class TaskHandler(ServerBase):
 
         super().stop()
 
-        self.log.info("Closing named pipes...")
-        if self.done_fifo is not None:
-            try:
-                self.done_fifo.close()
-            except BrokenPipeError:
-                pass
+        # We only want to close the tasking pipe to trigger the service to stop waiting.
+        # We need to wait on the service to finish the current task and close our done_fifo
+        # pipe so that it can be sent back to the system.
+        self.log.info("Closing task_fifo named pipes...")
         if self.task_fifo is not None:
             try:
                 self.task_fifo.close()
