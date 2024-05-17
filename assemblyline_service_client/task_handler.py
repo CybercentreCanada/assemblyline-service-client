@@ -34,6 +34,7 @@ DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
 LOG_LEVEL = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
 SHUTDOWN_SECONDS_LIMIT = 10
 SUPPORTED_API = 'v1'
+DEFAULT_REQUEST_TIMEOUT = int(os.environ.get("SERVICE_CLIENT_DEFAULT_REQUEST_TIMEOUT", 180))
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
 FILE_REQUEST_TIMEOUT = int(os.environ.get('FILE_REQUEST_TIMEOUT', 180))
 
@@ -184,6 +185,7 @@ class TaskHandler(ServerBase):
             kwargs.pop('headers')
         header_dump = '; '.join(f"{k}={v}" for k, v in self.session.headers.items())
         self.log.debug('query headers: ' + header_dump)
+        kwargs.setdefault('timeout', DEFAULT_REQUEST_TIMEOUT)
 
         retry = 0
 
@@ -335,6 +337,7 @@ class TaskHandler(ServerBase):
             self.status = STATUSES.STOPPING
             self.stop()
             return
+        self.log.info("Service registered with %d heuristics.", len(r['new_heuristics']))
 
         # Update service manifest with data received from service server
         self.update_service_manifest(r['service_config'])
