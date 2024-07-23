@@ -344,7 +344,9 @@ def test_get_task():
                          'type': 'text/plain'},
             'filename': 'blah',
             'ignore_cache': False,
+            # the following 1 line can be removed after assemblyline 4.6+
             'ignore_dynamic_recursion_prevention': False,
+            'ignore_recursion_prevention': False,
             'ignore_filtering': False,
             'max_files': 0,
             'metadata': {},
