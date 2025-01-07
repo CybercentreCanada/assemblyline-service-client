@@ -351,6 +351,9 @@ class TaskHandler(ServerBase):
         headers = {"Timeout": str(TASK_REQUEST_TIMEOUT)}
         self.log.info(f"Requesting a task with {TASK_REQUEST_TIMEOUT}s timeout...")
         r = self.request_with_retries('get', self._path('task'), headers=headers, timeout=TASK_REQUEST_TIMEOUT*2)
+        if r is None:
+            self.log.info("Get task failed")
+            return None
         if r['task'] is False:  # No task received
             self.log.info("No task received")
         else:  # Task received
