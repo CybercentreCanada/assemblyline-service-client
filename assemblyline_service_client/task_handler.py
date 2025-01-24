@@ -31,7 +31,6 @@ STATUSES = StringTable('STATUSES', [
 ])
 
 DEFAULT_API_KEY = 'ThisIsARandomAuthKey...ChangeMe!'
-LOG_LEVEL = logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO"))
 SHUTDOWN_SECONDS_LIMIT = 10
 SUPPORTED_API = 'v1'
 DEFAULT_REQUEST_TIMEOUT = int(os.environ.get("SERVICE_CLIENT_DEFAULT_REQUEST_TIMEOUT", 180))
@@ -78,8 +77,6 @@ class TaskHandler(ServerBase):
         self.headers: dict[str, str] = {}
         self.task = None
         self.tasking_dir = os.environ.get('TASKING_DIR', tempfile.gettempdir())
-
-        self.log.setLevel(LOG_LEVEL)
 
     def _path(self, prefix: str, *args: str) -> str:
         """
