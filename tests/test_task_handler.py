@@ -5,10 +5,10 @@ import tempfile
 import pytest
 import requests
 import requests_mock
-from assemblyline.odm.models.service import Service
+from assemblyline_service_client import task_handler
 from requests import ConnectionError, HTTPError, Session, Timeout, exceptions
 
-from assemblyline_service_client import task_handler
+from assemblyline.odm.models.service import Service
 
 SERVICE_CONFIG_NAME = "service_manifest.yml"
 TEMP_SERVICE_CONFIG_PATH = os.path.join("/tmp", SERVICE_CONFIG_NAME)
@@ -344,8 +344,6 @@ def test_get_task():
                          'type': 'text/plain'},
             'filename': 'blah',
             'ignore_cache': False,
-            # the following 1 line can be removed after assemblyline 4.6+
-            'ignore_dynamic_recursion_prevention': False,
             'ignore_recursion_prevention': False,
             'ignore_filtering': False,
             'max_files': 0,
