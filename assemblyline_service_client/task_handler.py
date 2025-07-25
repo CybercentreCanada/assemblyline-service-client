@@ -12,11 +12,13 @@ from typing import Any, Optional
 
 import requests
 import yaml
+from assemblyline_core.server_base import ServerBase
+
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
+from assemblyline.odm import SHA256_REGEX
 from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.service import Service
-from assemblyline_core.server_base import ServerBase
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
@@ -365,6 +367,12 @@ class TaskHandler(ServerBase):
         return task
 
     def download_file(self, sha256, sid) -> Optional[str]:
+        if not SHA256_REGEX.match(sha256):
+            # If the SHA256 is not valid, we cannot download the file
+            self.log.error(f"[{sid}] Invalid SHA256 provided: {sha256}")
+            self.status = STATUSES.ERROR_FOUND
+            return None
+
         self.status = STATUSES.DOWNLOADING_FILE
         received_file_sha256 = ''
         file_path = None
