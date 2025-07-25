@@ -1,7 +1,7 @@
 import copy
 import json
-import logging
 import os
+import re
 import select
 import shutil
 import signal
@@ -16,7 +16,7 @@ from assemblyline_core.server_base import ServerBase
 
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
-from assemblyline.odm import SHA256_REGEX
+from assemblyline.odm import SHA256_REGEX as SHA256_REGEX_PATTERN
 from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.service import Service
 
@@ -38,7 +38,7 @@ SUPPORTED_API = 'v1'
 DEFAULT_REQUEST_TIMEOUT = int(os.environ.get("SERVICE_CLIENT_DEFAULT_REQUEST_TIMEOUT", 180))
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
 FILE_REQUEST_TIMEOUT = int(os.environ.get('FILE_REQUEST_TIMEOUT', 180))
-
+SHA256_REGEX = re.compile(SHA256_REGEX_PATTERN)
 
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
 # By default there is no limit, but this lets the orchestration environment set one
