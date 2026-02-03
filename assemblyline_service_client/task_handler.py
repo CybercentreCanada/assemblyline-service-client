@@ -12,13 +12,12 @@ from typing import Any, Optional
 
 import requests
 import yaml
-from assemblyline_core.server_base import ServerBase
-
 from assemblyline.common.digests import get_sha256_for_file
 from assemblyline.common.str_utils import StringTable
 from assemblyline.odm import SHA256_REGEX as SHA256_REGEX_PATTERN
 from assemblyline.odm.messages.task import Task as ServiceTask
 from assemblyline.odm.models.service import Service
+from assemblyline_core.server_base import ServerBase
 
 STATUSES = StringTable('STATUSES', [
     ('INITIALIZING', 0),
@@ -39,7 +38,7 @@ DEFAULT_REQUEST_TIMEOUT = int(os.environ.get("SERVICE_CLIENT_DEFAULT_REQUEST_TIM
 TASK_REQUEST_TIMEOUT = int(os.environ.get('TASK_REQUEST_TIMEOUT', 30))
 FILE_REQUEST_TIMEOUT = int(os.environ.get('FILE_REQUEST_TIMEOUT', 180))
 SHA256_REGEX = re.compile(SHA256_REGEX_PATTERN)
-
+SERVICE_READY_PATH = f"/tmp/{os.environ.get('RUNTIME_PREFIX', 'service')}_ready"
 # The number of tasks a service will complete before stopping, letting the environment start a new container.
 # By default there is no limit, but this lets the orchestration environment set one
 TASK_COMPLETE_LIMIT = float(os.environ.get('AL_SERVICE_TASK_LIMIT', 'inf'))
@@ -238,6 +237,13 @@ class TaskHandler(ServerBase):
             if self.tasks_processed >= TASK_COMPLETE_LIMIT:
                 self.stop()
                 return
+
+            # Check if service is declared as ready
+            while not os.path.exists(SERVICE_READY_PATH):
+                self.log.info("Waiting for service to be declared as ready...")
+                time.sleep(5)
+            else:
+                self.log.info("Service is declared as ready. Continuing...")
 
             self.task = self.get_task()
             if not self.task:
