@@ -167,7 +167,7 @@ class TaskHandler(ServerBase):
     def cleanup_working_directory(self, folder_path):
         for file in os.listdir(folder_path):
             file_path = os.path.join(folder_path, file)
-            if file_path not in [self.task_fifo_path, self.done_fifo_path, self.service_manifest_yml]:
+            if file_path not in [self.task_fifo_path, self.done_fifo_path, self.service_manifest_yml, SERVICE_READY_PATH]:
                 try:
                     if os.path.isfile(file_path):
                         os.unlink(file_path)
