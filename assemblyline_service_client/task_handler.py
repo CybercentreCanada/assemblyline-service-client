@@ -371,7 +371,7 @@ class TaskHandler(ServerBase):
 
         return task
 
-    def download_file(self, sha256: str, sid: str):
+    def download_file(self, sha256: str, sid: str) -> Optional[str]:
         if not SHA256_REGEX.match(sha256):
             # If the SHA256 is not valid, we cannot download the file
             self.log.error(f"[{sid}] Invalid SHA256 provided: {sha256}")
@@ -423,12 +423,12 @@ class TaskHandler(ServerBase):
                     elif response.status_code == 404:
                         self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
                         self.status = STATUSES.FILE_NOT_FOUND
-                        return
+                        return None
                     else:
                         self.log.warning('[%s] Unknown response during file retrieval: %s(%s)',
                                          sid, response.reason, response.status_code)
                         self.status = STATUSES.ERROR_FOUND
-                        return
+                        return None
 
                 except requests.ConnectionError:
                     self.log.info("Service server is unreachable...")
@@ -445,7 +445,7 @@ class TaskHandler(ServerBase):
 
         self.log.error("[%s] No response given for file %s. Reporting task error to service server.", sid, sha256)
         self.status = STATUSES.ERROR_FOUND
-        return
+        return None
 
     def handle_task_result(self, result_json_path: str, task: ServiceTask):
         with open(result_json_path, 'r') as f:
