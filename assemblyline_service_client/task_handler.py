@@ -69,7 +69,7 @@ class TaskHandler(ServerBase):
         self.service: Optional[Service] = None
         self.service_manifest_data = None
         self.service_heuristics: list[dict] = []
-        self.service_tool_version: Optional[str] = None
+        self.service_tool_version: str = ''
         self.file_required = None
         self.service_api_host: str = api_host or os.environ.get('SERVICE_API_HOST') or 'http://localhost:5003'
         self.service_api_key: str = api_key or os.environ.get('SERVICE_API_KEY') or DEFAULT_API_KEY
@@ -104,7 +104,7 @@ class TaskHandler(ServerBase):
             "Container-ID": self.container_id,
             "Service-Name": self.service.name,
             "Service-Version": self.service.version,
-            "Service-Tool-Version": self.service_tool_version or '',
+            "Service-Tool-Version": self.service_tool_version,
         }
 
         self.session.headers.update(self.headers)
@@ -131,7 +131,7 @@ class TaskHandler(ServerBase):
                         time.sleep(.1)
                         continue
 
-                    self.service_tool_version = self.service_manifest_data.get('tool_version')
+                    self.service_tool_version = self.service_manifest_data.get('tool_version', '')
                     self.file_required = self.service_manifest_data.get('file_required', True)
 
                     # Save the heuristics from service manifest
@@ -242,8 +242,7 @@ class TaskHandler(ServerBase):
             while not os.path.exists(SERVICE_READY_PATH):
                 self.log.info("Waiting for service to be declared as ready...")
                 time.sleep(5)
-            else:
-                self.log.info("Service is declared as ready. Continuing...")
+            self.log.info("Service is declared as ready. Continuing...")
 
             self.task = self.get_task()
             if not self.task:

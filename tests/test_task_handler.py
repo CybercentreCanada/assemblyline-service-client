@@ -444,8 +444,8 @@ def test_handle_task_result():
         # It works!
         m.post(default_th._path('task'), json={"api_response": {"success": True}})
         assert default_th.handle_task_result(result_json_path, task) is None
-        assert default_th.session.headers["service_tool_version"] == "123"
-        assert default_th.headers["service_tool_version"] == "123"
+        assert default_th.session.headers["Service-Tool-Version"] == "123"
+        assert default_th.headers["Service-Tool-Version"] == "123"
 
         # It doesn't work (the first three times)
         callback_iteration = 0
@@ -462,7 +462,7 @@ def test_handle_task_result():
         m.put(default_th._path('file'), json={"api_response": {}}, )
 
         assert default_th.handle_task_result(result_json_path, task) is None
-        assert default_th.session.headers["service_tool_version"] == "123"
+        assert default_th.session.headers["Service-Tool-Version"] == "123"
 
         # ServiceServerException!
         m.post(default_th._path('task'), exc=task_handler.ServiceServerException)
