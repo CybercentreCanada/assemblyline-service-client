@@ -37,6 +37,7 @@ def teardown_module():
         os.remove(TEMP_SERVICE_CONFIG_PATH)
 
 
+
 def test_path():
     # Default
     default_th = task_handler.TaskHandler()
@@ -182,6 +183,7 @@ def test_try_run():
     default_th.load_service_manifest()
     default_th.session = Session()
     default_th.headers = dict()
+    open(task_handler.SERVICE_READY_PATH, 'w')
 
     _, default_th.task_fifo_path = tempfile.mkstemp()
     _, default_th.done_fifo_path = tempfile.mkstemp()
@@ -332,7 +334,7 @@ def test_get_task():
         task_as_prims = default_th.get_task().as_primitives()
         # Need to pop the sid because this is a randomly generated value
         task_as_prims.pop("sid")
-        task_as_prims == {
+        assert task_as_prims == {
             'deep_scan': False,
             'depth': 0,
             'fileinfo': {'magic': 'blah',
@@ -341,6 +343,9 @@ def test_get_task():
                          'sha1': 'da39a3ee5e6b4b0d3255bfef95601890afd80709',
                          'sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
                          'size': 0,
+                         'ssdeep': None,
+                         'tlsh': None,
+                         'uri_info': None,
                          'type': 'text/plain'},
             'filename': 'blah',
             'ignore_cache': False,
@@ -349,7 +354,7 @@ def test_get_task():
             'max_files': 0,
             'metadata': {},
             'min_classification': 'TLP:C',
-            'priority': 0,
+            'priority': 1,
             'safelist_config': {'enabled': False,
                                 'enforce_safelist_service': False,
                                 'hash_types': ['sha1',
@@ -385,6 +390,7 @@ def test_download_file():
         assert default_th.status == task_handler.STATUSES.DOWNLOADING_FILE_COMPLETED
 
         # Status code 404
+        os.unlink('/tmp/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
         m.get(default_th._path('file', sha256), status_code=404)
         assert default_th.download_file(sha256, sid) is None
         assert default_th.status == task_handler.STATUSES.FILE_NOT_FOUND
@@ -444,8 +450,8 @@ def test_handle_task_result():
         # It works!
         m.post(default_th._path('task'), json={"api_response": {"success": True}})
         assert default_th.handle_task_result(result_json_path, task) is None
-        assert default_th.session.headers["service_tool_version"] == "123"
-        assert default_th.headers["service_tool_version"] == "123"
+        assert default_th.session.headers["Service-Tool-Version"] == "123"
+        assert default_th.headers["Service-Tool-Version"] == "123"
 
         # It doesn't work (the first three times)
         callback_iteration = 0
@@ -462,7 +468,7 @@ def test_handle_task_result():
         m.put(default_th._path('file'), json={"api_response": {}}, )
 
         assert default_th.handle_task_result(result_json_path, task) is None
-        assert default_th.session.headers["service_tool_version"] == "123"
+        assert default_th.session.headers["Service-Tool-Version"] == "123"
 
         # ServiceServerException!
         m.post(default_th._path('task'), exc=task_handler.ServiceServerException)

@@ -69,7 +69,7 @@ class TaskHandler(ServerBase):
         self.service: Optional[Service] = None
         self.service_manifest_data = None
         self.service_heuristics: list[dict] = []
-        self.service_tool_version: Optional[str] = None
+        self.service_tool_version: str = ''
         self.file_required = None
         self.service_api_host: str = api_host or os.environ.get('SERVICE_API_HOST') or 'http://localhost:5003'
         self.service_api_key: str = api_key or os.environ.get('SERVICE_API_KEY') or DEFAULT_API_KEY
@@ -104,7 +104,7 @@ class TaskHandler(ServerBase):
             "Container-ID": self.container_id,
             "Service-Name": self.service.name,
             "Service-Version": self.service.version,
-            "Service-Tool-Version": self.service_tool_version or '',
+            "Service-Tool-Version": self.service_tool_version,
         }
 
         self.session.headers.update(self.headers)
@@ -131,7 +131,7 @@ class TaskHandler(ServerBase):
                         time.sleep(.1)
                         continue
 
-                    self.service_tool_version = self.service_manifest_data.get('tool_version')
+                    self.service_tool_version = self.service_manifest_data.get('tool_version', '')
                     self.file_required = self.service_manifest_data.get('file_required', True)
 
                     # Save the heuristics from service manifest
@@ -242,8 +242,7 @@ class TaskHandler(ServerBase):
             while not os.path.exists(SERVICE_READY_PATH):
                 self.log.info("Waiting for service to be declared as ready...")
                 time.sleep(5)
-            else:
-                self.log.info("Service is declared as ready. Continuing...")
+            self.log.info("Service is declared as ready. Continuing...")
 
             self.task = self.get_task()
             if not self.task:
@@ -372,7 +371,7 @@ class TaskHandler(ServerBase):
 
         return task
 
-    def download_file(self, sha256, sid) -> Optional[str]:
+    def download_file(self, sha256: str, sid: str) -> Optional[str]:
         if not SHA256_REGEX.match(sha256):
             # If the SHA256 is not valid, we cannot download the file
             self.log.error(f"[{sid}] Invalid SHA256 provided: {sha256}")
@@ -380,46 +379,73 @@ class TaskHandler(ServerBase):
             return None
 
         self.status = STATUSES.DOWNLOADING_FILE
-        received_file_sha256 = ''
-        file_path = None
-        self.log.info(f"[{sid}] Downloading file: {sha256}")
-        response = self.request_with_retries('get', self._path('file', sha256),
-                                             get_api_response=False, max_retry=3, headers=self.headers,
-                                             timeout=FILE_REQUEST_TIMEOUT)
-        if response is not None:
-            # Check if we got a 'good' response
-            if response.status_code == 200:
-                file_path = os.path.join(self.tasking_dir, sha256)
-                with open(file_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=1024):
-                        if chunk:  # filter out keep-alive new chunks
-                            f.write(chunk)
+        target_path = os.path.join(self.tasking_dir, sha256)
 
-                received_file_sha256 = get_sha256_for_file(file_path)
+        # Check if the file already exists
+        if os.path.exists(target_path):
+            received_file_sha256 = get_sha256_for_file(target_path)
 
-                # If the file retrieved is different from what we requested, report the error
-                if received_file_sha256 != sha256:
-                    self.log.error(f"[{sid}] Downloaded ({received_file_sha256}) doesn't match requested ({sha256}). "
-                                   "Reporting task error to service server.")
-                    self.status = STATUSES.ERROR_FOUND
-                    return
-
-                # Otherwise, this should be what we asked for, therefore success!
-                self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
-                return file_path
-            elif response.status_code == 404:
-                self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
-                self.status = STATUSES.FILE_NOT_FOUND
-                return
+            # If the file retrieved is different from what we requested we have to fall through to download
+            if received_file_sha256 != sha256:
+                self.log.warning("[%s] Downloaded (%s) doesn't match requested (%s). Retrying...",
+                                 sid, received_file_sha256, sha256)
+                os.unlink(target_path)
             else:
-                self.log.warning(f'[{sid}] Unknown response during file retrieval: '
-                                 f'{response.reason}({response.status_code})')
-                self.status = STATUSES.ERROR_FOUND
-                return
+                self.log.info("[%s] (%s) Already exists, skipping download.", sid, received_file_sha256)
+                self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
+                return target_path
 
-        self.log.error(f"[{sid}] No response given for file {sha256}. Reporting task error to service server.")
+        self.log.info("[%s] Downloading file: %s", sid, sha256)
+        for attempt in range(5):
+            with tempfile.NamedTemporaryFile(dir=self.tasking_dir) as buffer_file:
+                try:
+                    response = self.session.get(self._path('file', sha256), timeout=FILE_REQUEST_TIMEOUT, stream=True)
+                    # Check if we got a 'good' response
+                    if response.status_code == 200:
+                        for chunk in response.iter_content(chunk_size=1024):
+                            if chunk:  # filter out keep-alive new chunks
+                                buffer_file.write(chunk)
+                        buffer_file.flush()
+
+                        received_file_sha256 = get_sha256_for_file(buffer_file.name)
+
+                        # If the file retrieved is different from what we requested, report the error
+                        if received_file_sha256 != sha256:
+                            self.log.warning("[%s] Downloaded (%s) doesn't match requested (%s). Retrying...",
+                                             sid, received_file_sha256, sha256)
+                            continue
+
+                        # Otherwise, this should be what we asked for, therefore success!
+                        os.link(buffer_file.name, target_path)
+                        self.status = STATUSES.DOWNLOADING_FILE_COMPLETED
+                        return target_path
+
+                    elif response.status_code == 404:
+                        self.log.error(f"[{sid}] Requested file not found in the system: {sha256}")
+                        self.status = STATUSES.FILE_NOT_FOUND
+                        return None
+                    else:
+                        self.log.warning('[%s] Unknown response during file retrieval: %s(%s)',
+                                         sid, response.reason, response.status_code)
+                        self.status = STATUSES.ERROR_FOUND
+                        return None
+
+                except requests.ConnectionError:
+                    self.log.info("Service server is unreachable...")
+                except requests.Timeout as e:  # Handles ConnectTimeout and ReadTimeout
+                    self.log.warning("[%s] We've timed out fetching file %s (%s) Retrying..", sid, sha256, e)
+                except requests.HTTPError as e:
+                    self.log.error(str(e))
+                    raise
+                except requests.exceptions.RequestException as e:  # All other types of exceptions
+                    self.log.error(str(e))
+                    raise
+
+            time.sleep(min(2, 2 ** (attempt - 7)))
+
+        self.log.error("[%s] No response given for file %s. Reporting task error to service server.", sid, sha256)
         self.status = STATUSES.ERROR_FOUND
-        return
+        return None
 
     def handle_task_result(self, result_json_path: str, task: ServiceTask):
         with open(result_json_path, 'r') as f:
