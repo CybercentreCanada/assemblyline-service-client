@@ -215,7 +215,7 @@ class TaskHandler(ServerBase):
                     self.log.warning(f"Service server has been unreachable for the past {retry} attempts. "
                                      "Is there something wrong with it?")
             except requests.Timeout as e:  # Handles ConnectTimeout and ReadTimeout
-                self.log.warning(f"We've timed out on: {url} ({e}) Retrying..")
+                self.log.warning(f"We've timed out on: {url} ({e}) Retrying.. (attempt {retry + 1})")
                 pass
             except requests.HTTPError as e:
                 self.log.error(str(e))
@@ -465,7 +465,12 @@ class TaskHandler(ServerBase):
 
         data = dict(task=task.as_primitives(), result=result, freshen=True)
         try:
+            post_start = time.time()
             r = self.request_with_retries('post', self._path('task'), json=data, timeout=TASK_REQUEST_TIMEOUT)
+            post_elapsed = time.time() - post_start
+            if post_elapsed > 10.0:
+                self.log.warning(f"[{task.sid}] Slow result POST to service-server: {post_elapsed:.2f}s "
+                                 f"({len(result_files)} files, freshen=True)")
 
             if not r['success'] and r['missing_files']:
                 while not r['success'] and r['missing_files']:

@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "assemblyline-service-client"
+version = "4.0.0.dev0"
+description = "Assemblyline 4 - Service client"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "MIT"
+authors = [
+    { name = "CCCS Assemblyline development team", email = "assemblyline@cyber.gc.ca" },
+]
+keywords = [
+    "assemblyline",
+    "automated",
+    "malware",
+    "analysis",
+    "gc",
+    "canada",
+    "cse-cst",
+    "cse",
+    "cst",
+    "cyber",
+    "cccs",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "assemblyline",
+    "assemblyline-core",
+    "python-socketio",
+]
+
+[project.urls]
+Homepage = "https://github.com/CybercentreCanada/assemblyline-service-client/"
+
+[project.optional-dependencies]
+test = ["pytest", "requests-mock"]
+
+[tool.setuptools.packages.find]
+exclude = ["test/*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"*" = ["VERSION"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
