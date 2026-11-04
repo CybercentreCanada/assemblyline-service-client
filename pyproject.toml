@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "assemblyline-service-client"
-version = "4.0.0.dev0"
 description = "Assemblyline 4 - Service client"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
 authors = [
     { name = "CCCS Assemblyline development team", email = "assemblyline@cyber.gc.ca" },
 ]
+dynamic = ["version"]
 keywords = [
     "assemblyline",
     "automated",
@@ -44,6 +44,9 @@ Homepage = "https://github.com/CybercentreCanada/assemblyline-service-client/"
 
 [project.optional-dependencies]
 test = ["pytest", "requests-mock"]
+
+[tool.setuptools.dynamic]
+version = { file = ["assemblyline_service_client/VERSION"] }
 
 [tool.setuptools.packages.find]
 exclude = ["test/*"]
